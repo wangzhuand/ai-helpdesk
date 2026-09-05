@@ -1,5 +1,7 @@
 package com.example.helpdesk.service;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.helpdesk.common.BusinessException;
 import com.example.helpdesk.dto.SendMessageRequest;
 import com.example.helpdesk.entity.Conversation;
@@ -12,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * ClassName:ConversationService
@@ -62,5 +65,28 @@ public class ConversationService {
 
     }
 
+    //接口3：会话分页
+    public List<Message> listMessage(Long conversationId, Long lastId, Integer size) {
+        Conversation conversation = conversationMapper.selectById(conversationId);
+        if(conversation == null){
+            throw new BusinessException("会话不存在");
+        }
+        //限制size的大小，如果超过50就按50算
+        if(size == null || size <=0){
+            size = 20;
+        }
+        if (size >50) {
+            size =50;
+        }
+        LambdaQueryWrapper<Message> queryWrapper = new LambdaQueryWrapper<Message>()
+                .eq(Message::getConversationId,conversationId)
+                .orderByDesc(Message::getId)
+                .last("LIMIT "+size);
 
+        if(lastId != null){
+            queryWrapper.lt(Message::getId,lastId);
+        }
+        return messageMapper.selectList(queryWrapper);
+
+    }
 }

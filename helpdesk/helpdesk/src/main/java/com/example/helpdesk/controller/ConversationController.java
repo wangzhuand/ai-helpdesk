@@ -8,6 +8,8 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 /**
  * ClassName:ConversationController
  * Package:com.example.helpdesk.controller
@@ -34,6 +36,16 @@ public class ConversationController {
     public Result<Message> sendMessage(@PathVariable Long conversationId, @Valid @RequestBody SendMessageRequest message){
         return Result.success(conversationService.sendMessage(conversationId,message));
     }
+
+    //3.接口3：会话分页
+    @GetMapping("/{conversationId}/messages")
+    public Result<List<Message>> history(@PathVariable Long conversationId
+            ,@RequestParam(required = false) Long lastId
+            ,@RequestParam(defaultValue = "20") Integer size)
+    {
+        return Result.success(conversationService.listMessage(conversationId,lastId,size));
+    }
+
 
 
 }
