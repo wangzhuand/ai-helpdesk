@@ -1,15 +1,15 @@
 package com.example.helpdesk.controller;
 
 import com.example.helpdesk.Result;
+import com.example.helpdesk.common.UserContext;
 import com.example.helpdesk.dto.LoginRequest;
 import com.example.helpdesk.dto.LoginResponse;
 import com.example.helpdesk.service.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 /**
  * ClassName:AuthController
@@ -25,6 +25,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AuthController {
     private final AuthService authService;
+
+    //测试拦截器接口
+    @GetMapping("/me")
+    public Result<?> me(){
+        return Result.success(Map.of("userId", UserContext.getUserId(), "role", UserContext.getRole()));
+    }
+
+
 
     @PostMapping("/login")
     public Result<LoginResponse> login(@Valid @RequestBody LoginRequest loginRequest){
