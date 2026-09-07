@@ -1,6 +1,7 @@
 package com.example.helpdesk.controller;
 
 import com.example.helpdesk.Result;
+import com.example.helpdesk.dto.SendMessageResponse;
 import com.example.helpdesk.dto.SendMessageRequest;
 import com.example.helpdesk.entity.Message;
 import com.example.helpdesk.service.ConversationService;
@@ -33,7 +34,7 @@ public class ConversationController {
 
     //2.接口2：在会话里发消息
     @PostMapping("{conversationId}/messages")
-    public Result<Message> sendMessage(@PathVariable Long conversationId, @Valid @RequestBody SendMessageRequest message){
+    public Result<SendMessageResponse> sendMessage(@PathVariable Long conversationId, @Valid @RequestBody SendMessageRequest message){
         return Result.success(conversationService.sendMessage(conversationId,message));
     }
 
