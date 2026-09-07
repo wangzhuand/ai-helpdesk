@@ -14,8 +14,9 @@
     </div>
 
     <div class="input-bar">
-      <el-input v-model="text" placeholder="输入消息，回车发送" @keyup.enter="send" />
-      <el-button type="primary" @click="send">发送</el-button>
+      <el-input v-model="text" placeholder="输入消息，回车发送"
+                :disabled="sending" @keyup.enter="send" />
+      <el-button type="primary" :loading="sending" @click="send">发送</el-button>
     </div>
   </div>
 </template>
@@ -47,18 +48,24 @@ onMounted(async () => {
   }
 })
 
+const sending = ref(false)
+
 async function send() {
   const content = text.value.trim()
-  if (!content) return
+  if (!content || sending.value) return   // AI 思考中禁止重复发送
   text.value = ''
+  sending.value = true                    // 进入"思考中"状态
   try {
-    const saved = await api.post(`/v1/conversations/${conversationId.value}/messages`, { message: content })
-    messages.value.push(saved)
-    await nextTick()
-    listRef.value.scrollTop = listRef.value.scrollHeight
+    // 后端一次返回两条：访客消息 + AI 回复，都推进消息列表
+    const res = await api.post(`/v1/conversations/${conversationId.value}/messages`, { message: content })
+    messages.value.push(res.visitorMsg, res.aiMsg)
   } catch (e) {
     ElMessage.error(e.message)
+  } finally {
+    sending.value = false                 // 无论成败，恢复可发送
   }
+  await nextTick()
+  listRef.value.scrollTop = listRef.value.scrollHeight
 }
 
 // 游标分页：拿当前最早一条消息的 id 当游标，要更老的一批
