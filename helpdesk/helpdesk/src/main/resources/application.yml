@@ -2,14 +2,25 @@ server:
   port: 8080
 
 spring:
+  config:
+    import: optional:classpath:application-secret.yml
   datasource:
-    url: jdbc:mysql://localhost:3306/ai_helpdesk?useSSL=false&serverTimezone=UTC
+    url: jdbc:mysql://localhost:3306/ai_helpdesk?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
     username: root
     password: abc123
     driver-class-name: com.mysql.cj.jdbc.Driver
+  ai:
+    openai:
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-v4-flash
 
 
 
 jwt:
   secret: helpdesk-jwt-secret-please-change-in-production-123456
   expire-hours: 720
+
+
+
