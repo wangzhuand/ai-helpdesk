@@ -6,6 +6,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Objects;
@@ -24,6 +25,8 @@ import java.util.Objects;
 public class AiService {
     private final ChatClient chatClient;
 
+
+    //ai同步交流方法
     public String chat(List<Message> history) {
         List<org.springframework.ai.chat.messages.Message> turns =
                 history.stream().map(m ->{
@@ -41,5 +44,24 @@ public class AiService {
                 .messages(turns).call().content();
 
     }
+    //ai流式交流方法
+    public Flux<String> chatStream(List<Message> history){
+        List<org.springframework.ai.chat.messages.Message> turns =
+        history.stream().map(m ->{
+            if("VISITOR".equals(m.getSenderType())){
+                return (org.springframework.ai.chat.messages.Message) new UserMessage(m.getContent());
+            }
+            if("AI".equals(m.getSenderType()) || "AGENT".equals(m.getSenderType())){
+                return (org.springframework.ai.chat.messages.Message) new AssistantMessage(m.getContent());
+            }
+            return null;
+        }).filter(Objects::nonNull).toList();
+
+        return chatClient.prompt().system("你是一个在线客服机器人，请用中文友好，简洁的回答问题。不知道答案时就说不知道，不要瞎编")
+                .messages(turns).stream().content();//call是直接一整个把内容返回，stream是一个字一个字返回
+
+    }
+
+
 
 }
