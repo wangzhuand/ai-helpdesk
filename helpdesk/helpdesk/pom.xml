@@ -30,6 +30,10 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+        </dependency>
         <!-- Validation：接口参数校验（@NotBlank 之类），Day 3 就会用 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

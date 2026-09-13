@@ -75,13 +75,8 @@ public class ConversationController {
             }finally{
                 emitter.complete();
             }
-
-
         });
         return emitter;
-
-
-
     }
 
 
