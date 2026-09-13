@@ -71,7 +71,6 @@ public class KnowledgeBaseService {
                 chunk.setDocumentId(doc.getId());
                 chunk.setChunkIndex(i);
                 chunk.setContent(text);
-                chunk.setContent(text);
                 kbChunkMapper.insert(chunk);
 
                 String esId = "doc-" + doc.getId() + "-" + i;
@@ -90,7 +89,7 @@ public class KnowledgeBaseService {
 
 
         }catch (Exception e){
-            log.error("文档知识库处理失败，id=", doc.getId(),e);
+            log.error("文档知识库处理失败，id={}", doc.getId(),e);
             doc.setStatus("FAILED");
             kbDocumentMapper.updateById(doc);
             throw  new BusinessException("文档处理失败" + e.getMessage());
