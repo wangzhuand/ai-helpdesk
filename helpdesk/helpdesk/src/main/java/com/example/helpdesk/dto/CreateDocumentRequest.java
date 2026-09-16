@@ -14,10 +14,10 @@ import lombok.Data;
  */
 @Data
 public class CreateDocumentRequest {
-    @NotBlank
+    @NotBlank(message = "标题不能为空")
     private String title;
 
-    @NotBlank
+    @NotBlank(message = "内容不能为空")
     private String content;
 
 

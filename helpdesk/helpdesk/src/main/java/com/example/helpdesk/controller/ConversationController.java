@@ -1,7 +1,6 @@
 package com.example.helpdesk.controller;
 
 import com.example.helpdesk.Result;
-import com.example.helpdesk.dto.SendMessageResponse;
 import com.example.helpdesk.dto.SendMessageRequest;
 import com.example.helpdesk.entity.Message;
 import com.example.helpdesk.entity.Visitor;

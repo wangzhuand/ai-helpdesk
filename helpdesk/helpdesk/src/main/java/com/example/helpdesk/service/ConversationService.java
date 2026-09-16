@@ -80,15 +80,6 @@ public class ConversationService {
         return recent;
     }
 
-    //调ai，失败就兜底
-//        String reply;
-//        try {
-//            reply = aiService.chat(recent);
-//        }catch (Exception e){
-//            log.error("AI 调用失败",e);
-//            reply = "AI当前繁忙，请稍后再试，或点击转人工";
-//        }
-
     public Message saveAiMessage(Long conversationId, String content) {
         Message aiMsg = new Message();
         aiMsg.setConversationId(conversationId);
@@ -98,12 +89,6 @@ public class ConversationService {
         messageMapper.insert(aiMsg);
         return aiMsg;
     }
-
-//        SendMessageResponse response = new SendMessageResponse();
-//        response.setVisitorMsg(message1);
-//        response.setAiMsg(aiMsg);
-//        return response;
-
 
     //接口3：会话分页
     public List<Message> listMessage(Long conversationId, Long lastId, Integer size) {
