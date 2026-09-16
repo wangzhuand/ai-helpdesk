@@ -7,7 +7,7 @@
 - 后端：JDK 17 · SpringBoot 3.x · MyBatis-Plus · MySQL 8.0 · Redis
 - 检索：Elasticsearch 8（BM25 + 向量混合检索）
 - 中间件：RocketMQ 5（异步/延迟/死信）· Nacos · Sentinel（第二阶段）
-- AI：Spring AI · GLM（RAG + function calling + 评测回归）
+- AI：Spring AI · DeepSeek（对话）/ 阿里百炼（向量 embedding）（RAG + function calling + 评测回归）
 - 前端：Vue 3 · Element Plus · Pinia（SSE 流式聊天）
 - 部署：Docker Compose
 

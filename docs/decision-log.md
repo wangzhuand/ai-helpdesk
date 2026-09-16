@@ -28,3 +28,19 @@
 - **背景**：微服务是简历关键词，但一上来就拆会让 MVP 交付速度减半。
 - **决策**：先写模块清晰的单体；第 10 周拆出 ai-service 与 notification-service，理由是 LLM 延迟高且不稳定，必须与核心工单流程故障隔离（AI 挂 → 降级为直接转人工排队，核心不瘫）。
 - **放弃的方案**：一步到位微服务（MVP 期间运维成本吞掉开发速度）；永远单体（丢失服务拆分/注册发现/熔断降级的面试素材）。
+
+## 2026-09-15 · 检索层手写 ElasticsearchClient kNN + Java 手工 RRF，放弃 Spring AI VectorStore
+
+- **背景**：W5 RAG 需要"BM25 关键词 + 向量语义"两路召回，再把两路结果融合成一个排序。
+- **决策**：直接用 Spring Boot 自动配置的 `ElasticsearchClient` 手写 `knn` 查询；BM25 与向量两路的融合在 Java 里手工实现 RRF（`1/(k+rank)` 倒数加权），不依赖 ES 原生 `retriever.rrf`。
+- **放弃的方案**：
+  - **Spring AI `VectorStore`**：它只抽象了向量那一路，给不了 BM25，混合检索仍需手写；且它固定 `content / metadata / embedding` 三字段的 schema，与本项目已建好的 `kb_chunk`（`content` 用 IK 分词、`doc_title` 是独立字段）冲突——用它等于白瞎 IK 中文分词。手写才能把 `numCandidates`、`k`、"不同量纲的分数不能直接加权、RRF 只用排名"这些点讲清楚。
+  - **ES 8.8+ 原生 `retriever.rrf`**：服务器是 8.13 其实支持，但融合过程被黑盒吃掉，面试时讲不出原理，价值低。
+- **后续验证**：W5 用同一个 query 跑 keyword / vector / hybrid 三路对比；W12 在评测集上比 recall@3。
+
+## 2026-09-15 · 引用来源走 SSE `references` 事件下发，不让模型写正文
+
+- **背景**：RAG 回答需要让用户看到"这条答案参考了哪篇文档的哪一块"。
+- **决策**：后端在 `done` 事件**之前**单独下发一个 `references` 事件，payload 结构 `[{documentId, docTitle, chunkIndex, score, snippet}]`；AI 正文里不出现任何引用标记。
+- **放弃的方案**：让模型在回答末尾自己写「参考自《xxx》」——模型可能漏写、也可能编造一个不存在的文档名，且无法量化校验。
+- **后续验证**：后端命中的 chunk 是确定的、可断言的，W12 可以直接量化"引用正确率"，而不是靠人肉看回答。
