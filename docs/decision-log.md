@@ -44,3 +44,10 @@
 - **决策**：后端在 `done` 事件**之前**单独下发一个 `references` 事件，payload 结构 `[{documentId, docTitle, chunkIndex, score, snippet}]`；AI 正文里不出现任何引用标记。
 - **放弃的方案**：让模型在回答末尾自己写「参考自《xxx》」——模型可能漏写、也可能编造一个不存在的文档名，且无法量化校验。
 - **后续验证**：后端命中的 chunk 是确定的、可断言的，W12 可以直接量化"引用正确率"，而不是靠人肉看回答。
+
+## 2026-09-18 · 知识库上传不加 `@Transactional`，一致性问题整体留给 W7/W11
+
+- **背景**：`KnowledgeBaseService.upload()` 逐块写 MySQL 且无事务，中途失败会留孤儿 `kb_chunk` + 文档状态 FAILED（踩坑 17）。原计划（待办 A 第 7 项）是给它加 `@Transactional(rollbackFor = Exception.class)`，用"ES 写失败就回滚 MySQL"换一致性。
+- **决策**：**不加事务**。保持现有流程（先落库置 PROCESSING → 逐块向量化 + 双写 → 成功置 READY / 失败置 FAILED），把一致性问题整体交给 **W7 的 MQ 异步处理（失败重试 + 死信）+ W11 的 ES/MySQL 对账补偿**。
+- **放弃的方案**：`@Transactional`。两条理由：① `upload()` 的循环体内每块都要打一次百炼向量化 + 一次 ES 写入，**全是外部 HTTP 调用**，加事务等于把数据库连接按"几十次网络往返"的时长占住，W11 压测时是连接池打满的典型元凶；② **ES 不参与 MySQL 事务**，事务回滚时已经写进 ES 的 chunk 照样留在 ES 里——孤儿数据只是从 MySQL 挪到了 ES，一致性没有实质改善，反而多了长事务的代价。
+- **后续验证**：W7 用 RocketMQ 把"分块 + 向量化 + 双写"移到 consumer（带重试与死信），W11 跑对账脚本验证最终一致。

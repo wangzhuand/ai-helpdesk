@@ -8,7 +8,7 @@ import com.example.helpdesk.entity.KbChunk;
 import com.example.helpdesk.entity.KbDocument;
 import com.example.helpdesk.mapper.KbChunkMapper;
 import com.example.helpdesk.mapper.KbDocumentMapper;
-import com.example.helpdesk.mapper.KbDocumentMapper;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

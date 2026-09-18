@@ -2,7 +2,7 @@ package com.example.helpdesk.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.example.helpdesk.entity.Message;
-import jakarta.validation.constraints.NotBlank;
+
 import org.apache.ibatis.annotations.Mapper;
 
 /**

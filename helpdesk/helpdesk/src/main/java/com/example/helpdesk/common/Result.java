@@ -1,4 +1,4 @@
-package com.example.helpdesk;
+package com.example.helpdesk.common;
 
 import lombok.Data;
 

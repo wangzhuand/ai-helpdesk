@@ -8,7 +8,7 @@ import com.example.helpdesk.dto.LoginResponse;
 import com.example.helpdesk.entity.SysUser;
 import com.example.helpdesk.mapper.SysUserMapper;
 import lombok.RequiredArgsConstructor;
-import org.apache.catalina.User;
+
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 

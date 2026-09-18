@@ -29,7 +29,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
@@ -37,6 +37,23 @@ const messages = ref([])
 const text = ref('')
 const conversationId = ref(null)
 const listRef = ref(null)
+
+// 流式播放状态：从 send() 内部提升到组件作用域。
+// 为什么：原来是 send() 的局部变量，组件卸载时外部拿不到它们，
+// 于是"每 15ms 一次的定时器"和"fetch 的读取循环"会变成没人回收的孤儿。
+let timer = null            // 打字机节奏器
+let charQueue = []          // 待播放的字符队列
+let aiIndex = -1            // AI 气泡在 messages 里的下标（-1 = 还没插）
+let abortController = null  // 用来掐断正在进行的流式请求
+
+// 组件卸载时回收资源（切路由、关页面都会触发）
+onUnmounted(() => {
+  stopTyping()
+  if (abortController) {
+    abortController.abort()   // 掐断 fetch；后端感知到断开后会取消 LLM 调用
+    abortController = null
+  }
+})
 
 onMounted(async () => {
   try {
@@ -65,40 +82,50 @@ function scrollToBottom() {
   })
 }
 
+// 统一收尾，免得在 done / error / catch 三个分支里重复写 clearInterval
+function stopTyping() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+// 插入 AI 占位气泡并启动节奏器（每 15ms 吐一个字）
+function startAiBubble() {
+  messages.value.push({ id: 'temp-' + Date.now(), senderType: 'AI', content: '正在输入…', createdAt: '' })
+  aiIndex = messages.value.length - 1
+  scrollToBottom()
+  timer = setInterval(() => {
+    if (aiIndex < 0 || charQueue.length === 0) return
+    const ai = messages.value[aiIndex]
+    if (!ai) return
+    // ★ 必须通过 messages.value[下标] 改——这才是响应式对象；
+    //   用局部变量改不会触发界面更新（Vue3 经典坑，记牢）
+    if (ai.content === '正在输入…') ai.content = ''
+    ai.content += charQueue.shift()
+    scrollToBottom()
+  }, 15)
+}
+
 async function send() {
   const content = text.value.trim()
   if (!content || sending.value) return
   text.value = ''
   sending.value = true
 
-  // 打字机状态：等 visitor 事件（我的消息回执）到了，再插 AI 占位气泡
-  const charQueue = []
-  let aiIndex = -1            // AI 气泡在 messages 里的下标（-1 = 还没插）
-  let timer = null
-
-  // 插入 AI 占位气泡并启动节奏器（每 15ms 吐一个字）
-  const startAiBubble = () => {
-    messages.value.push({ id: 'temp-' + Date.now(), senderType: 'AI', content: '正在输入…', createdAt: '' })
-    aiIndex = messages.value.length - 1
-    scrollToBottom()
-    timer = setInterval(() => {
-      if (aiIndex < 0 || charQueue.length === 0) return
-      const ai = messages.value[aiIndex]
-      if (!ai) return
-      // ★ 必须通过 messages.value[下标] 改——这才是响应式对象；
-      //   用局部变量改不会触发界面更新（Vue3 经典坑，记牢）
-      if (ai.content === '正在输入…') ai.content = ''
-      ai.content += charQueue.shift()
-      scrollToBottom()
-    }, 15)
-  }
+  // 每次发送前重置播放状态（以前是局部变量，天然是干净的，现在得手动重置）
+  charQueue = []
+  aiIndex = -1
+  stopTyping()
+  abortController = new AbortController()
 
   try {
     // 用 fetch 发 POST 并读取流式响应（axios 不适合流式，绕开它）
     const resp = await fetch(`/api/v1/conversations/${conversationId.value}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: content })
+      body: JSON.stringify({ message: content }),
+      signal: abortController.signal
     })
     if (!resp.ok) throw new Error('HTTP ' + resp.status)
 
@@ -127,8 +154,7 @@ async function send() {
           if (aiIndex < 0) startAiBubble()
           charQueue.push(...ev.data)
         } else if (ev.event === 'done') {
-          clearInterval(timer)
-          timer = null
+          stopTyping()
           const final = JSON.parse(ev.data)     // 完整消息（含数据库 id）
           if (aiIndex >= 0) {
             messages.value[aiIndex] = final     // 用正式消息替换占位气泡
@@ -138,8 +164,7 @@ async function send() {
           aiIndex = -1
           scrollToBottom()
         } else if (ev.event === 'error') {
-          clearInterval(timer)
-          timer = null
+          stopTyping()
           if (aiIndex < 0) startAiBubble()
           messages.value[aiIndex].content = ev.data   // 把错误提示显示在气泡里
           scrollToBottom()
@@ -147,12 +172,14 @@ async function send() {
       }
     }
   } catch (e) {
-    clearInterval(timer)
-    timer = null
+    stopTyping()
+    // 组件卸载导致的主动中断不是错误，不弹提示（否则切路由时会闪一个红条）
+    if (e.name === 'AbortError') return
     if (aiIndex >= 0) messages.value[aiIndex].content = '发送失败：' + e.message
     ElMessage.error(e.message)
   } finally {
     sending.value = false
+    abortController = null
     scrollToBottom()
   }
 }

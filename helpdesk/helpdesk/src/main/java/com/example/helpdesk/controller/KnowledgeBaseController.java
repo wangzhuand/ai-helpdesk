@@ -1,6 +1,6 @@
 package com.example.helpdesk.controller;
 
-import com.example.helpdesk.Result;
+import com.example.helpdesk.common.Result;
 import com.example.helpdesk.common.UserContext;
 import com.example.helpdesk.dto.CreateDocumentRequest;
 import com.example.helpdesk.entity.KbDocument;
