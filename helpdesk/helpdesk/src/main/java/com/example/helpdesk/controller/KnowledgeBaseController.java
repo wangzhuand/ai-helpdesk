@@ -3,15 +3,13 @@ package com.example.helpdesk.controller;
 import com.example.helpdesk.common.Result;
 import com.example.helpdesk.common.UserContext;
 import com.example.helpdesk.dto.CreateDocumentRequest;
+import com.example.helpdesk.dto.RetrievedChunk;
 import com.example.helpdesk.entity.KbDocument;
 import com.example.helpdesk.service.KnowledgeBaseService;
+import com.example.helpdesk.service.RetrievalService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -30,6 +28,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class KnowledgeBaseController {
     private final KnowledgeBaseService knowledgeBaseService;
+    private final RetrievalService retrievalService;
 
     @PostMapping("/documents")
     public Result<Long> upload(@Valid @RequestBody CreateDocumentRequest request){
@@ -44,6 +43,14 @@ public class KnowledgeBaseController {
     @GetMapping("/documents")
     public Result<List<KbDocument>> list(){
         return Result.success(knowledgeBaseService.list());
+    }
+
+    //测试es接口
+    @GetMapping("/search-test")
+    public Result<List<RetrievedChunk>> searchTest(@RequestParam("q") String q,
+                                                   @RequestParam(defaultValue = "3") Integer k
+    ){
+        return Result.success(retrievalService.searchByVector(q,k));
     }
 
 }

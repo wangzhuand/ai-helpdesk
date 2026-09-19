@@ -4,15 +4,21 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.example.helpdesk.client.EmbeddingClient;
 import com.example.helpdesk.common.BusinessException;
+import com.example.helpdesk.common.Result;
+import com.example.helpdesk.dto.RetrievedChunk;
 import com.example.helpdesk.entity.KbChunk;
 import com.example.helpdesk.entity.KbDocument;
 import com.example.helpdesk.mapper.KbChunkMapper;
 import com.example.helpdesk.mapper.KbDocumentMapper;
 
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
+import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -45,6 +51,7 @@ public class KnowledgeBaseService {
     private final KbChunkMapper kbChunkMapper;
     private final EmbeddingClient embeddingClient;
     private final ElasticsearchClient esClient;
+
 
     public Long upload(String title,String content,Long createBy){
         //先把文档存库
@@ -102,6 +109,9 @@ public class KnowledgeBaseService {
         return kbDocumentMapper.selectList(
                 new LambdaQueryWrapper<KbDocument>().orderByDesc(KbDocument::getId));
     }
+
+
+
 
     private void writeToEs(String esId, Long documentId, String title,
                            int chunkIndex, String text, float[] vector) throws IOException {
