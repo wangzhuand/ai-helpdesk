@@ -48,9 +48,10 @@ public class KnowledgeBaseController {
     //测试es接口
     @GetMapping("/search-test")
     public Result<List<RetrievedChunk>> searchTest(@RequestParam("q") String q,
-                                                   @RequestParam(defaultValue = "3") Integer k
+                                                   @RequestParam(defaultValue = "hybrid") String mode,
+                                                   @RequestParam(defaultValue = "3")Integer k
     ){
-        return Result.success(retrievalService.searchByVector(q,k));
+        return Result.success(retrievalService.search(q,mode,k));
     }
 
 }
