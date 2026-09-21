@@ -10,6 +10,17 @@
            :class="['bubble', msg.senderType === 'VISITOR' ? 'right' : 'left']">
         <div class="meta">{{ senderName(msg.senderType) }}</div>
         <div class="content">{{ msg.content }}</div>
+
+        <!-- ★ W5-③：AI 回答的引用来源。点击文档名展开/收起内容片段
+             （改成点击而不是悬停：不依赖弹层组件，稳定且手机上也能用） -->
+        <div v-if="msg.senderType !== 'VISITOR' && dedupRefs(msg).length" class="refs">
+          <div class="refs-label">参考来源（点击展开片段）</div>
+          <div v-for="(r, i) in dedupRefs(msg)" :key="i">
+            <span class="ref-item" @click="toggleRef(msg.id, i)">《{{ r.docTitle }}》</span>
+            <!-- 兜底：万一后端发的是全文（content）而不是截断片段（snippet），也照样能显示 -->
+            <div v-if="expandedRefs[msg.id + '-' + i]" class="ref-snippet">{{ r.snippet || r.content || '（这一条没有片段）' }}</div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -45,6 +56,10 @@ let timer = null            // 打字机节奏器
 let charQueue = []          // 待播放的字符队列
 let aiIndex = -1            // AI 气泡在 messages 里的下标（-1 = 还没插）
 let abortController = null  // 用来掐断正在进行的流式请求
+let pendingReferences = []  // ★ W5-③：本次回答的引用来源（references 事件先到，气泡后出现，所以要先暂存）
+
+// ★ W5-③：哪些引用被展开了，key 形如 "消息id-第几条"
+const expandedRefs = ref({})
 
 // 组件卸载时回收资源（切路由、关页面都会触发）
 onUnmounted(() => {
@@ -90,9 +105,37 @@ function stopTyping() {
   }
 }
 
+// ★ W5-③：同一个文档的多个块只保留一条引用。
+// 用户关心的是"参考了哪几篇文档"，不是"哪几个块"；
+// 3 个块恰好来自同一篇时，原来会显示 3 条一样的文档名。
+function dedupRefs(msg) {
+  const refs = (msg && msg.references) ? msg.references : []
+  const seen = new Set()
+  const out = []
+  for (const r of refs) {
+    const key = r.documentId + '#' + r.docTitle
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(r)
+  }
+  return out
+}
+
+// ★ W5-③：展开/收起某一条引用的片段
+function toggleRef(msgId, i) {
+  const key = msgId + '-' + i
+  expandedRefs.value[key] = !expandedRefs.value[key]
+}
+
 // 插入 AI 占位气泡并启动节奏器（每 15ms 吐一个字）
 function startAiBubble() {
-  messages.value.push({ id: 'temp-' + Date.now(), senderType: 'AI', content: '正在输入…', createdAt: '' })
+  messages.value.push({
+    id: 'temp-' + Date.now(),
+    senderType: 'AI',
+    content: '正在输入…',
+    createdAt: '',
+    references: pendingReferences   // ★ W5-③：把已经收到的引用挂到气泡上
+  })
   aiIndex = messages.value.length - 1
   scrollToBottom()
   timer = setInterval(() => {
@@ -116,6 +159,7 @@ async function send() {
   // 每次发送前重置播放状态（以前是局部变量，天然是干净的，现在得手动重置）
   charQueue = []
   aiIndex = -1
+  pendingReferences = []
   stopTyping()
   abortController = new AbortController()
 
@@ -149,6 +193,10 @@ async function send() {
           // ① 先显示"我"的消息
           messages.value.push(JSON.parse(ev.data))
           scrollToBottom()
+        } else if (ev.event === 'references') {
+          // ★ W5-③：引用来源。它比第一个 token 先到，所以先暂存，
+          //   等 AI 气泡出现时再挂上去（见 startAiBubble）
+          pendingReferences = JSON.parse(ev.data) || []
         } else if (ev.event === 'token') {
           // ② 第一个 token 来时插入 AI 气泡（在"我"的消息下方），字入队
           if (aiIndex < 0) startAiBubble()
@@ -156,6 +204,8 @@ async function send() {
         } else if (ev.event === 'done') {
           stopTyping()
           const final = JSON.parse(ev.data)     // 完整消息（含数据库 id）
+          // ★ W5-③：后端发来的最终消息里没有引用，替换气泡时要把引用补上
+          final.references = pendingReferences
           if (aiIndex >= 0) {
             messages.value[aiIndex] = final     // 用正式消息替换占位气泡
           } else {
@@ -257,6 +307,29 @@ function senderName(type) {
   white-space: pre-wrap;
 }
 .bubble.right .content { background: #409eff; color: #fff; }
+/* ★ W5-③：引用来源样式 */
+.bubble .refs {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.bubble .refs-label { color: #b0b8c4; }
+.bubble .ref-item {
+  color: #6b7f9e;
+  cursor: pointer;
+  border-bottom: 1px dashed #c8d3e0;
+}
+.bubble .ref-item:hover { color: #409eff; }
+.bubble .ref-snippet {
+  margin: 4px 0 6px 0;
+  padding: 6px 8px;
+  background: #f2f5f9;
+  border-left: 2px solid #cdd9e8;
+  border-radius: 4px;
+  color: #667;
+  line-height: 1.7;
+  word-break: break-word;
+}
 .input-bar {
   display: flex;
   gap: 8px;

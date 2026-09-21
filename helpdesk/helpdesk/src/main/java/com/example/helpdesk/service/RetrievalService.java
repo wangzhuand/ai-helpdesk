@@ -78,12 +78,12 @@ public class RetrievalService {
                 result.add(toChunk(hit));
             }
 
-            log.info("向量检索完成, query={}, 命中 {} 条", query, result.size());
+            log.info("BM25检索完成, query={}, 命中 {} 条", query, result.size());
             return result;
 
         } catch (IOException e) {
             // ES 连不上（多半是 SSH 隧道断了）或查询语法错
-            log.error("ES 向量检索失败, query={}", query, e);
+            log.error("ES BM25检索失败, query={}", query, e);
             throw new BusinessException("检索失败：" + e.getMessage());
         }
     }

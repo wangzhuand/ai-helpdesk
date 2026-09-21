@@ -1,10 +1,13 @@
 package com.example.helpdesk.controller;
 
 import com.example.helpdesk.common.Result;
+import com.example.helpdesk.dto.ReferenceItem;
+import com.example.helpdesk.dto.RetrievedChunk;
 import com.example.helpdesk.dto.SendMessageRequest;
 import com.example.helpdesk.entity.Message;
 import com.example.helpdesk.service.AiService;
 import com.example.helpdesk.service.ConversationService;
+import com.example.helpdesk.service.RetrievalService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +17,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,6 +43,7 @@ public class ConversationController {
     private final ConversationService conversationService;
     private final ObjectMapper objectMapper;
     private final AiService aiService;
+    private final RetrievalService retrievalService;
 
     // 接口1：创建会话（匿名访客），返回会话 id
     @PostMapping
@@ -58,6 +63,17 @@ public class ConversationController {
         Message visitorMsg = conversationService.saveVisitorMessage(conversationId, request.getMessage());
         // 取最近 20 条历史，作为上下文
         List<Message> recent = conversationService.recentMessages(conversationId);
+
+        //检索参考资料
+        List<RetrievedChunk> refs;
+        try {
+            refs = retrievalService.search(request.getMessage(),"hybrid",3);
+        }catch (Exception e){
+            log.error("检索失败，降级为无资料回答",e);
+            refs = List.of();
+        }
+
+
 
         // SseEmitter 就是"一条通向浏览器、可以慢慢往里写数据的长连接"，参数是最长 120 秒
         SseEmitter emitter = new SseEmitter(120_000L);
@@ -97,6 +113,21 @@ public class ConversationController {
             return emitter;
         }
 
+        if(!refs.isEmpty()){
+            try {
+                emitter.send(SseEmitter.event().name("references").data(objectMapper.writeValueAsString(toReferenceItems(refs))));
+            } catch (IOException e) {
+                log.debug("参考资料发送失败（客户端可能已经断开）: {}", e.getMessage());
+                return emitter;
+            }
+        }
+
+
+
+
+
+
+
         // 用来把一个个碎片 token 攒成完整回答，最后才能存库
         StringBuilder reply = new StringBuilder();
 
@@ -104,7 +135,7 @@ public class ConversationController {
         // 注意：chatStream(recent) 返回的 Flux 只是一份"将来会来很多字"的说明书，
         // 不调用 subscribe 它什么都不会发生（这叫冷流/惰性）。
         // subscribe 的三个参数就是三种情况下的处理规则，分别对应"数据来了 / 出错了 / 结束了"。
-        Disposable disposable = aiService.chatStream(recent).subscribe(
+        Disposable disposable = aiService.chatStream(recent, refs).subscribe(
                 // 规则①（每来一个 token）：攒起来 + 转发给浏览器
                 token -> {
                     reply.append(token);
@@ -156,5 +187,17 @@ public class ConversationController {
             , @RequestParam(defaultValue = "20") Integer size) {
         return Result.success(conversationService.listMessage(conversationId, lastId, size));
     }
+
+    private List<ReferenceItem> toReferenceItems(List<RetrievedChunk> refs){
+        List<ReferenceItem> items = new ArrayList<>();
+        for(RetrievedChunk c : refs){
+        String text = c.getContent() == null ?"" : c.getContent();
+        String snippet = text.length() > 100 ? text.substring(0,100) + "..." : text;
+            items.add(new ReferenceItem(c.getDocumentId(),c.getDocTitle(),c.getChunkIndex(),c.getScore(),snippet));
+        }
+        return items;
+    }
+
+
 
 }
