@@ -4,6 +4,7 @@ package com.example.helpdesk.common;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -67,4 +68,13 @@ public class GlobalExceptionHandler {
         log.error("系统异常", e);
         return Result.error(500, "系统繁忙，请稍后重试");
     }
+
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public Result<Void> handleMethodNotSupported(HttpRequestMethodNotSupportedException e){
+        log.warn("不支持当前请求方法: {}", e.getMessage());
+        return Result.error(405,"请求方式不支持:" + e.getMessage());
+    }
+
+
 }
