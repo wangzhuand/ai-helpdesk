@@ -2,7 +2,13 @@
   <div class="chat-container">
     <div class="header">
       <h3>AI 客服</h3>
-      <el-button size="small" text @click="loadOlder">加载更早的消息</el-button>
+      <div class="header-right">
+        <!-- ★ W6-4：实时通道状态。坐席的消息靠这条 SSE 长连接推过来，
+             连不上时这里会变灰 —— 一眼就能判断"为什么收不到坐席回复" -->
+        <span :class="['live-dot', live ? 'on' : 'off']"></span>
+        <span class="live-text">{{ live ? '实时通道已连接' : '实时通道未连接' }}</span>
+        <el-button size="small" text @click="loadOlder">加载更早的消息</el-button>
+      </div>
     </div>
 
     <div class="message-list" ref="listRef">
@@ -58,12 +64,18 @@ let aiIndex = -1            // AI 气泡在 messages 里的下标（-1 = 还没�
 let abortController = null  // 用来掐断正在进行的流式请求
 let pendingReferences = []  // ★ W5-③：本次回答的引用来源（references 事件先到，气泡后出现，所以要先暂存）
 
+// ★ W6-4：访客的"实时通道"。普通消息走 POST + fetch 流（一问一答），
+//   但坐席的消息是"服务器主动推过来的"——这种方向必须用 EventSource（浏览器内置的 SSE 客户端）。
+let eventSource = null
+const live = ref(false)   // 通道是否连着（显示在标题栏，方便判断"为什么收不到坐席回复"）
+
 // ★ W5-③：哪些引用被展开了，key 形如 "消息id-第几条"
 const expandedRefs = ref({})
 
 // 组件卸载时回收资源（切路由、关页面都会触发）
 onUnmounted(() => {
   stopTyping()
+  closeLive()   // ★ W6-4：关掉 SSE 长连接，否则切走之后连接还挂在后端登记表里
   if (abortController) {
     abortController.abort()   // 掐断 fetch；后端感知到断开后会取消 LLM 调用
     abortController = null
@@ -83,6 +95,10 @@ onMounted(async () => {
     const list = await api.get(`/v1/conversations/${cid}/messages`, { params: { size: 50 } })
     messages.value = list.reverse()
     scrollToBottom()   // 打开页面直接滑到最新消息
+    // ★ W6-4：必须在"历史赋值"之后再连实时通道。
+    //   若反过来先连，推送来的消息会被上面那句 messages.value = ... 整段覆盖掉
+    //   （赋值是"替换整个数组"，不是追加）
+    openLive(conversationId.value)
   } catch (e) {
     ElMessage.error(e.message)
   }
@@ -218,6 +234,17 @@ async function send() {
           if (aiIndex < 0) startAiBubble()
           messages.value[aiIndex].content = ev.data   // 把错误提示显示在气泡里
           scrollToBottom()
+        } else if (ev.event === 'waiting') {
+          // ★ W6-4：会话已转人工，后端跳过 AI 只回这一条。
+          //   它不会再有 token / done，所以直接插一个"系统"气泡告诉访客等人工。
+          stopTyping()
+          messages.value.push({
+            id: 'sys-' + Date.now(),
+            senderType: 'SYSTEM',
+            content: ev.data,
+            createdAt: ''
+          })
+          scrollToBottom()
         }
       }
     }
@@ -244,6 +271,55 @@ function parseSse(frame) {
   }
   if (dataLines.length === 0) return null
   return { event, data: dataLines.join('\n') }
+}
+
+// ★ W6-4：连上访客实时通道（坐席消息的下发通道）
+function openLive(cid) {
+  closeLive()   // 先关掉可能存在的旧连接，避免留下野连接
+  eventSource = new EventSource(`/api/v1/conversations/${cid}/stream`)
+
+  // 后端建好连接后立刻回一个 connected 事件（相当于"握手成功"）
+  eventSource.addEventListener('connected', () => {
+    live.value = true
+  })
+
+  // 坐席回复：后端 registry.push(id, "agent", 消息)
+  eventSource.addEventListener('agent', (e) => {
+    appendIncoming(e.data)
+  })
+
+  // 系统提示，比如接管时的"客服已接入，正在为您服务"
+  eventSource.addEventListener('system', (e) => {
+    appendIncoming(e.data)
+  })
+
+  // 断线时浏览器会自动重连（EventSource 内置行为，不用自己写重试）。
+  // 这里只更新状态、不弹提示 —— 否则后端重启那几秒会疯狂弹红条。
+  eventSource.onerror = () => {
+    live.value = false
+  }
+}
+
+function closeLive() {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+  live.value = false
+}
+
+// 把服务端推来的消息追加到列表
+// 按 id 去重：EventSource 重连、或后端重复推送时，不会出现两条一样的消息
+function appendIncoming(raw) {
+  let msg
+  try {
+    msg = JSON.parse(raw)
+  } catch (e) {
+    return
+  }
+  if (msg && msg.id && messages.value.some((m) => m.id === msg.id)) return
+  messages.value.push(msg)
+  scrollToBottom()
 }
 
 // 游标分页：拿当前最早一条消息的 id 当游标，要更老的一批
@@ -288,6 +364,16 @@ function senderName(type) {
   border-bottom: 1px solid #eee;
 }
 .header h3 { margin: 0; }
+/* ★ W6-4：实时通道状态指示 */
+.header-right { display: flex; align-items: center; gap: 8px; }
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c4cc;
+}
+.live-dot.on { background: #67c23a; }   /* 连上 = 绿 */
+.live-text { font-size: 12px; color: #999; }
 .message-list {
   flex: 1;
   overflow-y: auto;

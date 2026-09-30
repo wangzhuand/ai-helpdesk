@@ -2,6 +2,7 @@ package com.example.helpdesk.service;
 
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.helpdesk.common.BusinessException;
 
 import com.example.helpdesk.entity.Conversation;
@@ -113,5 +114,108 @@ public class ConversationService {
         }
         return messageMapper.selectList(queryWrapper);
 
+    }
+
+
+
+    //往会话里插一条系统消息
+    public Message saveSystemMessage(Long conversationId,String content){
+        Message msg = new Message();
+        msg.setConversationId(conversationId);
+        msg.setSenderType("SYSTEM");
+        msg.setContent(content);
+        msg.setCreatedAt(LocalDateTime.now());
+        messageMapper.insert(msg);
+
+        //更新会话最后的活跃时间
+        Conversation conversation = conversationMapper.selectById(conversationId);
+        if(conversation != null){
+            conversation.setLastMessageAt(LocalDateTime.now());
+            conversationMapper.updateById(conversation);
+        }
+        return msg;
+
+    }
+
+
+
+
+    //把会话传给人工
+    public void escalateToAgent(Long conversationId){
+        Conversation conversation = conversationMapper.selectById(conversationId);
+        if(conversation == null){
+            throw new BusinessException("会话不存在");
+        }
+        if(!"AI".equals(conversation.getStatus())){
+            return;
+        }
+        conversation.setStatus("AGENT");
+        conversationMapper.updateById(conversation);
+
+    }
+
+
+
+
+    //这个会话是否被人工接管了
+    public boolean isHumanMode(Long conversationId){
+        Conversation conversation = conversationMapper.selectById(conversationId);
+        if(conversation == null){
+            throw new BusinessException("会话不存在");
+        }
+        return "AGENT".equals(conversation.getStatus());
+    }
+
+
+    //控制台会话列表，mine = true 看我的，= false 看待接管池
+    public List<Conversation> listForConsole(Boolean mine,Long agentId){
+        LambdaQueryWrapper<Conversation> conversationLambdaQueryWrapper = new LambdaQueryWrapper<Conversation>()
+                .eq(Conversation::getStatus,"AGENT")
+                .orderByDesc(Conversation::getLastMessageAt);
+        if (Boolean.TRUE.equals(mine)){
+            conversationLambdaQueryWrapper.eq(Conversation::getAgentId,agentId);
+        }else {
+            conversationLambdaQueryWrapper.isNull(Conversation::getAgentId);
+        }
+        return  conversationMapper.selectList(conversationLambdaQueryWrapper);
+    }
+
+
+    public void takeOver(Long id, Long userId) {
+
+        int affected = conversationMapper.update(null,new LambdaUpdateWrapper<Conversation>()
+                        .eq(Conversation::getId,id)
+                        .eq(Conversation::getStatus,"AGENT")
+                        .isNull(Conversation::getAgentId)//只有没人接的时候才能接
+                .set(Conversation::getAgentId,userId)
+        );
+        if (affected == 0){
+            throw new BusinessException("会话已被其他坐席接管，请刷新");
+        }
+        //让访客知道坐席介入了
+        saveSystemMessage(id,"客服已接入，正在为您服务");
+
+    }
+
+    public Message saveAgentMessage(Long id, String message) {
+        Message agentMsg = new Message();
+        agentMsg.setConversationId(id);
+        agentMsg.setContent(message);
+        agentMsg.setSenderType("AGENT");
+        agentMsg.setCreatedAt(LocalDateTime.now());
+        messageMapper.insert(agentMsg);
+
+
+
+        //更新会话的最后活跃时间
+        Conversation conversation = conversationMapper.selectById(id);
+        if(conversation != null){
+            conversation.setLastMessageAt(LocalDateTime.now());
+            conversationMapper.updateById(conversation);
+        }
+
+
+
+        return agentMsg;
     }
 }

@@ -161,6 +161,21 @@ public class TicketService {
     }
 
 
+    //查询是否有未关闭的工单，用于建单幂等兜底
+    public Ticket findOpenByConversation(Long conversationId){
+        return ticketMapper.selectOne(new LambdaQueryWrapper<Ticket>()
+                .eq(Ticket::getConversationId,conversationId)
+                .in(Ticket::getStatus,List.of(
+                        TicketStatus.OPEN.name(),
+                        TicketStatus.PROCESSING.name(),
+                        TicketStatus.REOPENED.name()))
+                .orderByDesc(Ticket::getId)
+                .last("LIMIT 1"));
+    }
+
+
+
+
 
 
 

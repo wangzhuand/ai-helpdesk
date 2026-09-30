@@ -1,13 +1,12 @@
 package com.example.helpdesk.controller;
 
 import com.example.helpdesk.common.Result;
+import com.example.helpdesk.component.SseSessionRegistry;
 import com.example.helpdesk.dto.ReferenceItem;
 import com.example.helpdesk.dto.RetrievedChunk;
 import com.example.helpdesk.dto.SendMessageRequest;
 import com.example.helpdesk.entity.Message;
-import com.example.helpdesk.service.AiService;
-import com.example.helpdesk.service.ConversationService;
-import com.example.helpdesk.service.RetrievalService;
+import com.example.helpdesk.service.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +43,8 @@ public class ConversationController {
     private final ObjectMapper objectMapper;
     private final AiService aiService;
     private final RetrievalService retrievalService;
+    private final TicketService ticketService;
+    private final SseSessionRegistry registry;
 
     // 接口1：创建会话（匿名访客），返回会话 id
     @PostMapping
@@ -61,23 +62,13 @@ public class ConversationController {
     public SseEmitter sendMessage(@PathVariable Long conversationId, @Valid @RequestBody SendMessageRequest request) {
         // ① 访客消息立刻存库，拿到回执（前端要马上把"我"这条气泡显示出来）
         Message visitorMsg = conversationService.saveVisitorMessage(conversationId, request.getMessage());
-        // 取最近 20 条历史，作为上下文
-        List<Message> recent = conversationService.recentMessages(conversationId);
 
-        //检索参考资料
-        List<RetrievedChunk> refs;
-        try {
-            refs = retrievalService.search(request.getMessage(),"hybrid",3);
-        }catch (Exception e){
-            log.error("检索失败，降级为无资料回答",e);
-            refs = List.of();
-        }
-
-
-
+        //w6：查会话状态，决定走agent还是人工
+        boolean humanMode = conversationService.isHumanMode(conversationId);
         // SseEmitter 就是"一条通向浏览器、可以慢慢往里写数据的长连接"，参数是最长 120 秒
         SseEmitter emitter = new SseEmitter(120_000L);
 
+        //断开回调（两路都要注册）
         // ===== 关键点 1：盒子（AtomicReference）=====
         // 为什么不直接写 Disposable d = ... ？
         //   a) lambda 只能捕获 final 的局部变量，而 d 要等下面 subscribe 返回才有值（还要被重新赋值）
@@ -103,8 +94,10 @@ public class ConversationController {
         emitter.onTimeout(cancelUpstream);             // 120 秒超时时
         emitter.onError(e -> cancelUpstream.run());    // 连接出错时
 
+
         // 先把用户消息的回执推给前端。
         // 注意：这里用的是 checked 异常 IOException，和下面 token 转发处不同 —— 因为 send 的重载不同
+        //两路都要发，否则前端不显示我的气泡
         try {
             emitter.send(SseEmitter.event().name("visitor").data(objectMapper.writeValueAsString(visitorMsg)));
         } catch (IOException e) {
@@ -113,18 +106,50 @@ public class ConversationController {
             return emitter;
         }
 
+
+
+
+        //人工接管，不检索，不调模型，只告诉前端等人工回复，然后关链接
+        //放在检索之前，可以省调一次embedding + 两次ES查询
+        if (humanMode) {
+            try {
+                emitter.send(SseEmitter.event().name("waiting")
+                        .data("已转接人工客服，坐席会尽快回复，请稍候"));
+            } catch (IOException e) {
+                log.debug("waiting 发送失败: {}", e.getMessage());
+            }
+            emitter.complete();
+            log.info("会话 {} 已转人工，跳过 AI 回答", conversationId);
+            return emitter;
+        }
+
+
+
+    //*********一下是AI分支的逻辑
+
+        // 取最近 20 条历史，作为上下文
+        List<Message> recent = conversationService.recentMessages(conversationId);
+
+        //检索参考资料
+        List<RetrievedChunk> refs;
+        try {
+            refs = retrievalService.search(request.getMessage(),"hybrid",3);
+        }catch (Exception e){
+            log.error("检索失败，降级为无资料回答",e);
+            refs = List.of();
+        }
+
+
+
         if(!refs.isEmpty()){
             try {
-                emitter.send(SseEmitter.event().name("references").data(objectMapper.writeValueAsString(toReferenceItems(refs))));
+                emitter.send(SseEmitter.event().name("references")
+                        .data(objectMapper.writeValueAsString(toReferenceItems(refs))));
             } catch (IOException e) {
                 log.debug("参考资料发送失败（客户端可能已经断开）: {}", e.getMessage());
                 return emitter;
             }
         }
-
-
-
-
 
 
 
@@ -135,7 +160,11 @@ public class ConversationController {
         // 注意：chatStream(recent) 返回的 Flux 只是一份"将来会来很多字"的说明书，
         // 不调用 subscribe 它什么都不会发生（这叫冷流/惰性）。
         // subscribe 的三个参数就是三种情况下的处理规则，分别对应"数据来了 / 出错了 / 结束了"。
-        Disposable disposable = aiService.chatStream(recent, refs).subscribe(
+
+        //w6第三步：造一个绑定当前会话的工具实例
+        TicketTools ticketTools = new TicketTools(conversationId, ticketService, conversationService);
+
+        Disposable disposable = aiService.chatStream(recent, refs,ticketTools).subscribe(
                 // 规则①（每来一个 token）：攒起来 + 转发给浏览器
                 token -> {
                     reply.append(token);
@@ -199,5 +228,25 @@ public class ConversationController {
     }
 
 
+
+
+
+
+    @GetMapping(value = "/{conversationId}/stream",produces = "text/event-stream;charset=utf-8")
+    public SseEmitter stream(@PathVariable Long conversationId){
+        //1.设置连接超时时长
+        SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
+
+        //2注册进注册表
+        registry.register(conversationId,emitter);
+
+        //3.立刻发一个连接成功的事件
+        try {
+            emitter.send(SseEmitter.event().name("connected").data("ok"));
+        }catch (IOException e){
+            registry.remove(conversationId,emitter);
+        }
+        return emitter;
+    }
 
 }

@@ -14,6 +14,6 @@ import lombok.Data;
  */
 @Data
 public class SendMessageRequest {
-    @NotBlank
+    @NotBlank(message = "消息内容不能为空")
     private String message;
 }

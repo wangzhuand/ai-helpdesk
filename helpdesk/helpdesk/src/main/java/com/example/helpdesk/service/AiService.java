@@ -51,12 +51,19 @@ public class AiService {
    @param references 检索到的知识块
 
     */
-    public Flux<String> chatStream(List<Message> history, List<RetrievedChunk> references){
+    public Flux<String> chatStream(List<Message> history, List<RetrievedChunk> references,Object tools){
         String system = SYSTEM_TEMPLATE.formatted(buildReferenceContext(references));
-        return chatClient.prompt().system(system)
-                .messages(toAiMessage(history))
-                .stream()
-                .content();
+
+        ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                .system(system)
+                .messages(toAiMessage(history));
+
+        //用工具就挂上
+        if(tools != null){
+            spec = spec.tools(tools);
+        }
+        return spec.stream().content();
+
     }
 
 //把Message实体翻译成SPring AI 认识的对话消息
