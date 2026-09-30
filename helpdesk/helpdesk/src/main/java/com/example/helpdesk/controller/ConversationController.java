@@ -248,5 +248,13 @@ public class ConversationController {
         }
         return emitter;
     }
+    @PostMapping("/{id}/resolved")
+    public Result<Void> resolved(@PathVariable Long id
+            ,@RequestParam(defaultValue = "false") Boolean resolved){
+        conversationService.markResolved(id,resolved);
+        return Result.success();
+    }
+
+
 
 }
