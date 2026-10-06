@@ -33,9 +33,10 @@ cd helpdesk-web && npm run dev
 - [x] W2：会话与消息（游标分页；前后端联调通过）
 - [x] W3：LLM 接入 DeepSeek + SSE 流式打字机（多轮对话记忆）
 - [x] W4：Elasticsearch 知识库（IK 中文分词 + kNN 向量字段）——上传 → 分块 → 向量化 → MySQL/ES 双写 → 状态机
-- [ ] **W5（进行中）**：RAG 检索——kNN 向量检索 / 混合检索（BM25+向量+RRF）/ 回答带引用
-- [ ] W6：工单模块 + function calling → MVP 闭环
-- [ ] W7-12：MQ / Redis 深度 / 微服务 / 评测
+- [x] W5：RAG 检索——kNN 向量检索 / 混合检索（BM25+向量+RRF）/ 回答带引用
+- [x] W6：工单模块 + function calling → **MVP 闭环打通**
+- [ ] **W7（进行中）**：RocketMQ —— ①文档异步处理（含失败重试）✅
+- [ ] W8-12：MQ 剩余场景 / Redis 深度 / 微服务 / 评测
 - [ ] W13-16：Agent 升级 / 部署上线
 
 > 详细进度与交接说明见 [docs/02-开发日志.md](docs/02-开发日志.md)

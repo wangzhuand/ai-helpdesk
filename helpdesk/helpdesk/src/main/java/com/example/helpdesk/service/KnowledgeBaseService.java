@@ -1,37 +1,37 @@
 package com.example.helpdesk.service;
 
-import co.elastic.clients.elasticsearch.ElasticsearchClient;
+
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.example.helpdesk.client.EmbeddingClient;
-import com.example.helpdesk.common.BusinessException;
-import com.example.helpdesk.common.Result;
-import com.example.helpdesk.dto.RetrievedChunk;
-import com.example.helpdesk.entity.KbChunk;
+
+import com.example.helpdesk.dto.KbDocProcessMessage;
+
 import com.example.helpdesk.entity.KbDocument;
-import com.example.helpdesk.mapper.KbChunkMapper;
 import com.example.helpdesk.mapper.KbDocumentMapper;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestParam;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
-import javax.annotation.Nullable;
-import java.io.IOException;
+import lombok.RequiredArgsConstructor;
+
+import lombok.extern.slf4j.Slf4j;
+import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.support.MessageBuilder;
+import org.springframework.stereotype.Service;
+
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
+
 import java.util.List;
-import java.util.Map;
+
 
 
 /**
  * ClassName:KnowledgeBaseService
  * Package:com.example.helpdesk.service
  * Description:
- *  知识库：文档-》分块-》向量化-》双写-》状态机
+ *知识库服务：
+ * 上传不再同步，只“落库+发消息”，真正的处理逻辑搬到了KbDocProcessConsumer
+ *
  * @Author 妄汐霜
  * @Create 2026/9/13 15:53
  * @Version 1.0
@@ -40,106 +40,68 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class KnowledgeBaseService {
-//每块最多多少字
-    private static final int CHUNK_SIZE = 500;
-//相邻块重叠多少字
-    private static final int CHUNK_OVERLAP = 50;
+    //文档处理消息队列的topic，生产者在这里定义，消费者引用他--抽成常量防止写错
+   public static final String KB_DOC_TOPIC="Kb-doc-process";
 
-    private static final String ES_INDEX = "kb_chunk";
+   private final KbDocumentMapper kbDocumentMapper;
+   private final RocketMQTemplate rocketMQTemplate;
+   private final ObjectMapper objectMapper;
 
-    private final KbDocumentMapper kbDocumentMapper;
-    private final KbChunkMapper kbChunkMapper;
-    private final EmbeddingClient embeddingClient;
-    private final ElasticsearchClient esClient;
+   /*
+   上传文档：只做“落库+发消息+返回"
 
+   改之前：逐块调百联向量化，逐块写es，一份20块的文档要几十秒（前端三十秒直接超时断开）
+   改之后：1次insert+1次发消息，几十毫秒返回
+    */
+   public Long upload(String title,String content,Long createBy){
+       //1.落库
+       // 状态写PENDING，PROCESSING交给消费者去置，这样前端能区分派对中和处理中
+       //正文必须写进来，异步处理之后它的代码跑在另一个线程里，拿不到方法参数
+       KbDocument doc = new KbDocument();
+       doc.setTitle(title);
+       doc.setContent(content);
+       doc.setSourceType("TEXT");
+       doc.setStatus("PENDING");
+       doc.setChunkNum(0);
+       doc.setCreatedBy(createBy);
+       doc.setCreatedAt(LocalDateTime.now());
+       kbDocumentMapper.insert(doc);
 
-    public Long upload(String title,String content,Long createBy){
-        //先把文档存库
-        KbDocument doc = new KbDocument();
-        doc.setTitle(title);
-        doc.setSourceType("TEXT");
-        doc.setStatus("PROCESSING");
-        doc.setChunkNum(0);
-        doc.setCreatedBy(createBy);
-        doc.setCreatedAt(LocalDateTime.now());
-        kbDocumentMapper.insert(doc);
+        //2,把这个要处理的文档放进MQ
+       sendProcessMessage(doc.getId(),0,0);
 
-        try {
-            //分块
-            List<String> chunks = split(content);
-
-            //逐块处理，每块都先向量化，存mysql，写es，回填esId
-            for(int i = 0;i < chunks.size();i++){
-                String text = chunks.get(i);
-
-                float[] vector = embeddingClient.embed(text);
-
-                KbChunk chunk = new KbChunk();
-                chunk.setDocumentId(doc.getId());
-                chunk.setChunkIndex(i);
-                chunk.setContent(text);
-                kbChunkMapper.insert(chunk);
-
-                String esId = "doc-" + doc.getId() + "-" + i;
-                writeToEs(esId,doc.getId(),title,i,text,vector);
-
-                chunk.setEsId(esId);
-                kbChunkMapper.updateById(chunk);
-            }
-                //全部成功，设置状态为就绪
-                doc.setStatus("READY");
-                doc.setChunkNum(chunks.size());
-                kbDocumentMapper.updateById(doc);
-
-                log.info("Document ID: {}, Chunk Num: {}", doc.getId(), chunks.size());
-                return doc.getId();
+       //3.立刻返回
+       log.info("文档已入库并投递处理消息，docId={},title={}",doc.getId(),doc.getTitle());
+       return doc.getId();
+   }
 
 
-        }catch (Exception e){
-            log.error("文档知识库处理失败，id={}", doc.getId(),e);
-            doc.setStatus("FAILED");
-            kbDocumentMapper.updateById(doc);
-            throw  new BusinessException("文档处理失败" + e.getMessage());
-        }
+        //发消息的方法
+    public void sendProcessMessage(Long docId,int attempt,int delayLevel){
+       String json;
+       try {
+           json = objectMapper.writeValueAsString(new KbDocProcessMessage(docId,attempt));
+       }catch (JsonProcessingException e){
+           throw new IllegalStateException("文档处理消息序列化失败",e);
+       }
+
+       if(delayLevel > 0){
+           Message<String> message = MessageBuilder.withPayload(json).build();
+           rocketMQTemplate.syncSend(KB_DOC_TOPIC,message,3000,delayLevel);
+           log.error("已投递【延迟重投】消息：docId={},attempt={},delayLevel={}",docId,attempt,delayLevel);
+       }else {
+           rocketMQTemplate.convertAndSend(KB_DOC_TOPIC,json);
+       }
+
+
 
     }
 
+    public List<KbDocument> list(){
+       return kbDocumentMapper.selectList(
+               new LambdaQueryWrapper<KbDocument>().orderByDesc(KbDocument::getId));
 
-    public List<KbDocument> list() {
-        return kbDocumentMapper.selectList(
-                new LambdaQueryWrapper<KbDocument>().orderByDesc(KbDocument::getId));
     }
-
-
-
-
-    private void writeToEs(String esId, Long documentId, String title,
-                           int chunkIndex, String text, float[] vector) throws IOException {
-        Map<String, Object> doc = new HashMap<>();
-        doc.put("content", text);
-        doc.put("document_id", documentId);
-        doc.put("chunk_index", chunkIndex);
-        doc.put("doc_title", title);
-        doc.put("embedding", vector);
-
-        esClient.index(i -> i.index(ES_INDEX).id(esId).document(doc));
-    }
-
-    private List<String> split(String content) {
-        List<String> chunks = new ArrayList<>();
-        int start = 0;
-        while (start < content.length()) {
-            int end = Math.min(start + CHUNK_SIZE, content.length());
-            chunks.add(content.substring(start, end));
-            if (end == content.length()) {
-                break;
-            }
-            start = end - CHUNK_OVERLAP;
-        }
-        return chunks;
-    }
-
-
 
 
 

@@ -27,5 +27,8 @@ jwt:
 embedding:
   base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
   model: qwen3.7-text-embedding-flash
-
-
+rocketmq:
+  name-server: 127.0.0.1:9876
+  producer:
+    group: helpdesk-producer
+    send-message-timeout: 3000
