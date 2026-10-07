@@ -4,12 +4,12 @@
 
 ## 技术栈
 
-- 后端：JDK 17 · SpringBoot 3.x · MyBatis-Plus · MySQL 8.0 · Redis
-- 检索：Elasticsearch 8（BM25 + 向量混合检索）
-- 中间件：RocketMQ 5（异步/延迟/死信）· Nacos · Sentinel（第二阶段）
-- AI：Spring AI · DeepSeek（对话）/ 阿里百炼（向量 embedding）（RAG + function calling + 评测回归）
-- 前端：Vue 3 · Element Plus · Pinia（SSE 流式聊天）
-- 部署：Docker Compose
+- 后端：JDK 17 · Spring Boot 3.5 · MyBatis-Plus · MySQL 8.0 · 手写 JWT（jjwt）
+- 检索：Elasticsearch 8（IK 中文分词 + BM25/向量混合检索 + 手写 RRF 融合）
+- 中间件：RocketMQ（异步/延迟/重试）· Redis（缓存/限流/锁）
+- AI：Spring AI · DeepSeek（对话）/ 阿里百炼（向量 embedding）—— RAG + function calling + 评测回归
+- 前端：Vue 3 · Vite · Element Plus · Vue Router（SSE 流式聊天）
+- 部署：Docker（ES/RocketMQ 容器）· Docker Compose（计划）
 
 ## 文档
 
