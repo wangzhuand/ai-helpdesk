@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.helpdesk.common.BusinessException;
 
 import com.example.helpdesk.component.SseSessionRegistry;
+import com.example.helpdesk.component.SystemMessageCreatedEvent;
 import com.example.helpdesk.entity.Conversation;
 import com.example.helpdesk.entity.Message;
 import com.example.helpdesk.entity.Ticket;
@@ -15,6 +16,7 @@ import com.example.helpdesk.mapper.MessageMapper;
 import com.example.helpdesk.mapper.VisitorMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,6 +43,7 @@ public class ConversationService {
     private final AiService aiService;
     private final TicketService ticketService;
     private final SseSessionRegistry registry;
+    private final ApplicationEventPublisher eventPublisher;
 
     public Long createConversation() {
         //1.先创建一个访客
@@ -139,7 +142,10 @@ public class ConversationService {
             conversation.setLastMessageAt(LocalDateTime.now());
             conversationMapper.updateById(conversation);
         }
-        registry.push(conversationId,"system",msg);
+        //推送给访客--发事件，由SystemMessagePusher决定时机
+        //调用方有事务，事务提交后再推，没有事务--立刻推
+        //（不能在事务里直接push，那样推送会早于提交，访客可能看到但库里查不到）
+        eventPublisher.publishEvent(new SystemMessageCreatedEvent(conversationId,msg));
         return msg;
 
     }

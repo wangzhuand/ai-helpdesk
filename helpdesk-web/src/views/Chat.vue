@@ -125,7 +125,9 @@ const feedbackHint = computed(() => {
 // 用**本地时钟**而不是消息里的 createdAt 来计时：
 //   后端返回的是 LocalDateTime（"2026-09-30T21:12:33"，没有时区），
 //   拿来算时间差容易踩时区的坑；而"距离上次消息过了多久"本来就是我们这台机器的感受。
-const IDLE_MS = 30 * 1000   // 静默阈值。想快速看效果就调成 5*1000
+// ★ 静默阈值：开发环境 3 秒（方便测试），生产构建 30 秒（正常体验）
+//   用 Vite 内置的 DEV 变量自动区分，不用手动改来改去；想固定某个值就直接写死数字
+const IDLE_MS = import.meta.env.DEV ? 3 * 1000 : 30 * 1000
 
 let tickTimer = null                       // 每秒跳一次的钟
 const nowTick = ref(Date.now())            // 当前时间（每秒更新，驱动下面那个 computed 重算）
