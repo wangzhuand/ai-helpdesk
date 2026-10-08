@@ -4,7 +4,7 @@
       <!-- ===================== 文档管理 ===================== -->
       <el-tab-pane label="文档管理" name="docs">
         <div class="toolbar">
-          <span class="hint">上传后会被切块并逐块向量化，文档较大时需要等一会儿（W7 会改成异步处理）</span>
+          <span class="hint">上传后立即返回，切块与向量化在后台异步处理；状态从「待处理」变为「已就绪」即可用于检索</span>
           <div class="spacer" />
           <el-button text @click="loadDocs">刷新</el-button>
           <el-button type="primary" @click="uploadVisible = true">上传文档</el-button>

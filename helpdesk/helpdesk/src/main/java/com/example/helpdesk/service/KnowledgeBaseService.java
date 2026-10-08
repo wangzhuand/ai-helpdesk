@@ -3,8 +3,10 @@ package com.example.helpdesk.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.example.helpdesk.dto.KbDocProcessMessage;
 
+import com.example.helpdesk.dto.KbDocTxArg;
 import com.example.helpdesk.entity.KbDocument;
 import com.example.helpdesk.mapper.KbDocumentMapper;
 
@@ -52,27 +54,29 @@ public class KnowledgeBaseService {
 
    改之前：逐块调百联向量化，逐块写es，一份20块的文档要几十秒（前端三十秒直接超时断开）
    改之后：1次insert+1次发消息，几十毫秒返回
+
+   W7把这个方法改成事务方法
     */
    public Long upload(String title,String content,Long createBy){
-       //1.落库
-       // 状态写PENDING，PROCESSING交给消费者去置，这样前端能区分派对中和处理中
-       //正文必须写进来，异步处理之后它的代码跑在另一个线程里，拿不到方法参数
-       KbDocument doc = new KbDocument();
-       doc.setTitle(title);
-       doc.setContent(content);
-       doc.setSourceType("TEXT");
-       doc.setStatus("PENDING");
-       doc.setChunkNum(0);
-       doc.setCreatedBy(createBy);
-       doc.setCreatedAt(LocalDateTime.now());
-       kbDocumentMapper.insert(doc);
+       //提前生成ID
+       Long docId = IdWorker.getId();
 
-        //2,把这个要处理的文档放进MQ
-       sendProcessMessage(doc.getId(),0,0);
+       KbDocTxArg arg = new KbDocTxArg();
+       arg.setDocId(docId);
+       arg.setTitle(title);
+       arg.setContent(content);
+       arg.setCreateBy(createBy);
 
-       //3.立刻返回
-       log.info("文档已入库并投递处理消息，docId={},title={}",doc.getId(),doc.getTitle());
-       return doc.getId();
+        //发事务消息：Broker收半消息，【同步】回调executeLocalTransaction
+        sendProcessMessageInTransaction(docId,arg);
+
+       // 本地事务失败了？抛出去让接口正常报错，而不是返回一个数据库里不存在的 docId
+       if (arg.getError() != null) {
+           throw new IllegalStateException("文档入库失败", arg.getError());
+       }
+
+       log.info("文档已入库并投递处理消息，docId={}, title={}", docId, title);
+       return docId;
    }
 
 
@@ -102,6 +106,30 @@ public class KnowledgeBaseService {
                new LambdaQueryWrapper<KbDocument>().orderByDesc(KbDocument::getId));
 
     }
+
+
+
+
+    /*
+    发事务方法的消息：
+    Broker先发半消息，消费者不可见，等监听器的结果再决定投不投
+     */
+    public void sendProcessMessageInTransaction(Long docId,Object txArg){
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(new KbDocProcessMessage(docId,0));
+        }catch (JsonProcessingException e){
+            throw new IllegalStateException("文档处理消息序列化失败",e);
+        }
+
+        Message<String> message = MessageBuilder.withPayload(json).build();
+        rocketMQTemplate.sendMessageInTransaction(KB_DOC_TOPIC,message,txArg);
+
+
+
+    }
+
+
 
 
 

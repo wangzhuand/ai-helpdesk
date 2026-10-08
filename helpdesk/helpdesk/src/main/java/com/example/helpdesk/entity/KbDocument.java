@@ -22,7 +22,7 @@ import java.time.LocalDateTime;
     @Data
     @TableName("kb_document")
 public class KbDocument {
-@TableId(type = IdType.AUTO)
+@TableId(type = IdType.ASSIGN_ID)
 private Long id;
 
 private String title;

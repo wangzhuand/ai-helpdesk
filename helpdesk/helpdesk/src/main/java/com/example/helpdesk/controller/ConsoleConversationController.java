@@ -55,7 +55,7 @@ private final SseSessionRegistry registry;
     @PostMapping("/{id}/messages")
     public Result<Long> sendMessage(@PathVariable Long id, @Valid @RequestBody SendMessageRequest request) {
         //1.存库
-        Message agentMsg = conversationService.saveAgentMessage(id, request.getMessage());
+        Message agentMsg = conversationService.saveAgentMessage(id, request.getMessage(),UserContext.getUserId());
 
         //2推给访客（不在线就什么都不做，消息已经存库）
         registry.push(id, "agent", agentMsg);

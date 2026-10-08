@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * ClassName:ConversationService
@@ -210,7 +211,19 @@ public class ConversationService {
 
     }
 
-    public Message saveAgentMessage(Long id, String message) {
+    public Message saveAgentMessage(Long id, String message,Long agentId) {
+        //越权校验：只有负责这个会话的坐席才能回复
+        Conversation conversation = conversationMapper.selectById(id);
+        if (conversation == null){
+            throw new BusinessException("会话不存在");
+        }
+        //Objects.equals处理null安全，会话还没被接管时（agentId为null）时，谁都不能发
+        if (!Objects.equals(conversation.getAgentId(),agentId)){
+            throw new BusinessException("你未接管该会话，无法回复");
+        }
+
+
+
         Message agentMsg = new Message();
         agentMsg.setConversationId(id);
         agentMsg.setContent(message);
@@ -221,7 +234,6 @@ public class ConversationService {
 
 
         //更新会话的最后活跃时间
-        Conversation conversation = conversationMapper.selectById(id);
         if(conversation != null){
             conversation.setLastMessageAt(LocalDateTime.now());
             conversationMapper.updateById(conversation);
