@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
@@ -45,6 +46,7 @@ public class ConversationController {
     private final RetrievalService retrievalService;
     private final TicketService ticketService;
     private final SseSessionRegistry registry;
+    private final StringRedisTemplate stringRedisTemplate;
 
     // 接口1：创建会话（匿名访客），返回会话 id
     @PostMapping
@@ -162,7 +164,7 @@ public class ConversationController {
         // subscribe 的三个参数就是三种情况下的处理规则，分别对应"数据来了 / 出错了 / 结束了"。
 
         //w6第三步：造一个绑定当前会话的工具实例
-        TicketTools ticketTools = new TicketTools(conversationId, ticketService, conversationService);
+        TicketTools ticketTools = new TicketTools(conversationId, ticketService, conversationService,stringRedisTemplate);
 
         Disposable disposable = aiService.chatStream(recent, refs,ticketTools).subscribe(
                 // 规则①（每来一个 token）：攒起来 + 转发给浏览器

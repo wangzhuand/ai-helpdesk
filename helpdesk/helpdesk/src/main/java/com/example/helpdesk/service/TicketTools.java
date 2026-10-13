@@ -5,8 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * ClassName:TicketTools
@@ -26,6 +28,7 @@ public class TicketTools {
     private final Long conversationId;
     private final TicketService ticketService;
     private final ConversationService conversationService;
+    private final StringRedisTemplate redis;
 
 
     /*
@@ -63,11 +66,23 @@ public class TicketTools {
     ){
         log.info("工具调用 createTicket, conversationId={}, title={}, category={}", conversationId, title, category);
 
+        //第一道幂等：运用setnx防重
+        String dedupKey = "ticket:dedup:conv:" + conversationId;
+        Boolean first = redis.opsForValue().setIfAbsent(dedupKey,"1",10, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(first)){
+            log.warn("[建单防重]10秒内请勿重复发送请求，已拦截，conversationId={}",conversationId);
+            return "已收到你的建单请求，正在处理中，请勿重复提交，不需要再调用本工具";
+        }
+
+
+
+
         //幂等判断，同一会话已有未关闭的工单就不再重复创建
         Ticket existing = ticketService.findOpenByConversation(conversationId);
         if(existing != null){
             return "该会话中已有处理中的工单，工单号" + existing.getTicketNo() + ",无需重复创建";
         }
+
         //operatorId 传null:工单时AI创建的，不是坐席创建的（日志里操作人为空，也可约定用0表示ai）
         Long ticketId = ticketService.create(title,category,description,conversationId,null);
         Ticket ticket = ticketService.getById(ticketId);

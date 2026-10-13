@@ -86,17 +86,6 @@ public class KbDocTransactionListener implements RocketMQLocalTransactionListene
             return RocketMQLocalTransactionState.UNKNOWN;
         }
 
-
-
-
-
-
     }
-
-
-
-
-
-
 
 }
