@@ -6,16 +6,20 @@ import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.example.helpdesk.client.EmbeddingClient;
 import com.example.helpdesk.common.BusinessException;
 import com.example.helpdesk.dto.RetrievedChunk;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
-
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
+import java.util.concurrent.TimeUnit;
 /**
  * ClassName:RetrievalService
  * Package:com.example.helpdesk.service
@@ -36,6 +40,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class RetrievalService {
 
+    private  final StringRedisTemplate redis;
+
     private static final String ES_INDEX = "kb_chunk";
 
     /** HNSW 粗筛候选池：先快速捞 50 个"大概像"的，再在这 50 个里精确算余弦取前 k 个 */
@@ -49,14 +55,100 @@ public class RetrievalService {
 
     private final EmbeddingClient embeddingClient;
     private final ElasticsearchClient esClient;
+
+    //检索缓存的版本号key：文档变更时+1，让所有旧缓存集体失效
+    public static final String SEARCH_CACHE_VER_KEY = "kb:search:ver";
+
+    //检索缓存TTL
+    private static final int SEARCH_CACHE_TTL_MINUTES = 10;
+    private final ObjectMapper objectMapper;
+
+
     //统一入口，按mode分流，controller只调这一个方法
+    //redis缓存就加在这一层：所有模式和所有调用方法都经过这里
     public List<RetrievedChunk> search(String query,String mode,int k){
-        return switch(mode){
+        String key = buildSearchCacheKey(query,mode,k);
+
+        //1.先查缓存
+        try{
+            String cached = redis.opsForValue().get(key);
+            if(cached != null){
+                log.info("检索缓存命中，key={}",key);
+                return objectMapper.readValue(cached, new TypeReference<List<RetrievedChunk>>() {
+                });
+            }
+        }catch (Exception e){
+            log.warn("读检查缓存失败，降级直查数据库，key={}",key);
+        }
+
+
+        //2.未命中。走原来的检索逻辑
+        List<RetrievedChunk> result =  switch(mode){
             case "keyword" -> searchByKeyword(query,k);
             case "vector" -> searchByVector(query,k);
             default  -> searchByHybrid(query,k);  //默认走混合检索
         };
+
+        //回填缓存
+        try{
+            redis.opsForValue().set(key,objectMapper.writeValueAsString(result),
+                    SEARCH_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
+        }catch (Exception e){
+            log.warn("回填检索缓存失败，key={}",key,e);
+        }
+
+        return result;
     }
+
+    //让检索缓存全部失效--文档新增/修改/删除后调用
+    //做法：把版本号全部加1，旧key就没人能读到了，ttl过期之后会被慢慢清理
+    public void invalidateSearchCache(){
+        try{
+            redis.opsForValue().increment(SEARCH_CACHE_VER_KEY);
+            log.info("检索缓存已失效（版本号+1）");
+        }catch (Exception e){
+        log.warn("刷新检索缓存版本失败",e);
+        }
+    }
+
+    //拼检索缓存的key：kb:search:{版本}:{query哈希}:{mode}:{k}
+    private String buildSearchCacheKey(String query,String mode,int k){
+        String ver = "1";
+        try{
+            String v = redis.opsForValue().get(SEARCH_CACHE_VER_KEY);
+            if(v != null){
+                ver = v;
+            }
+        }catch (Exception e){
+            log.warn("读缓存版本号失败，按1处理",e);
+        }
+        //归一化：去首位空格，英文转小写，减少同一个问题不同key
+        String normalized = query == null ? "" : query.trim().toLowerCase();
+        return "kb:search:" + ver + ":"+ md5(normalized) + ":" + mode + ":" + k;
+    }
+
+    private String md5(String text){
+        try{
+            MessageDigest md = MessageDigest.getInstance("MD5");
+
+            byte[] bytes = md.digest(text.getBytes(StandardCharsets.UTF_8));
+
+            StringBuilder sb = new StringBuilder();
+            for(byte b : bytes){
+                sb.append(String.format("%02x",b));
+            }
+            return sb.toString();
+        }catch (Exception e){
+            return String.valueOf(text.hashCode());
+        }
+
+    }
+
+
+
+
+
+
 
     //关键词检索
     public List<RetrievedChunk> searchByKeyword(String query, int k) {
@@ -166,23 +258,6 @@ public class RetrievalService {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /** 把 ES 的一条命中翻译成 RetrievedChunk */
     //DTO映射
     private RetrievedChunk toChunk(Hit<Map> hit) {
@@ -211,3 +286,6 @@ public class RetrievalService {
         return list;
     }
 }
+
+
+

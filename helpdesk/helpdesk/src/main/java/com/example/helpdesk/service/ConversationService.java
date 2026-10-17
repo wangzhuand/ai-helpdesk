@@ -14,9 +14,12 @@ import com.example.helpdesk.entity.Visitor;
 import com.example.helpdesk.mapper.ConversationMapper;
 import com.example.helpdesk.mapper.MessageMapper;
 import com.example.helpdesk.mapper.VisitorMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +27,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 /**
  * ClassName:ConversationService
@@ -45,6 +49,8 @@ public class ConversationService {
     private final TicketService ticketService;
     private final SseSessionRegistry registry;
     private final ApplicationEventPublisher eventPublisher;
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
 
     public Long createConversation() {
         //1.先创建一个访客
@@ -75,19 +81,59 @@ public class ConversationService {
 
         conversation.setLastMessageAt(LocalDateTime.now());
         conversationMapper.updateById(conversation);
+        evictRecentCache(conversationId);
         return message1;
     }
 
+    //会话缓存的key--抽出来，读缓存和删缓存共用，避免两边拼错
+    private String recentCacheKey(Long conversationId){
+    return "chat:conv:" + conversationId + ":recent";
+    }
+
+    //删缓存：“写时删”--不更新缓存，下次读的时候自然回填
+    private void evictRecentCache(Long conversationId){
+        try {
+            redis.delete(recentCacheKey(conversationId));
+        }catch (Exception e){
+            //缓存是增强不是依赖：Redis出问题也不能影响发消息本身
+            log.warn("删除会话缓存失败，conversationId={}",conversationId,e);
+        }
+    }
 
     //取最近20条作为上下文
     public List<Message> recentMessages(Long conversationId) {
+         String key = recentCacheKey(conversationId);
+         log.info("缓存进入recentMessages,conversationId={},key={}",conversationId,key);
+
+
+         //1.先查缓存
+        try {
+            String cached = redis.opsForValue().get(key);
+            if (cached != null){
+                return objectMapper.readValue(cached, new TypeReference<List<Message>>() {
+                });
+            }
+        }catch (Exception e){
+            log.warn("读会话缓存失败，降级查库，conversationId={}",conversationId,e);
+        }
+
+        //2.缓存没命中-》查数据库
         LambdaQueryWrapper<Message> wrapper = new LambdaQueryWrapper<Message>()
-                .eq(Message::getConversationId, conversationId)
+                .eq(Message::getConversationId,conversationId)
                 .orderByDesc(Message::getId)
                 .last("LIMIT 20");
         List<Message> recent = messageMapper.selectList(wrapper);
         Collections.reverse(recent);//转为正序
+
+        //3.回填缓存（TTL：30分钟：兜底，万一某次漏删也能自动恢复）
+        try {
+            redis.opsForValue().set(key,objectMapper.writeValueAsString(recent),30, TimeUnit.MINUTES);
+            log.info("缓存回填成功，key={}",key);
+        }catch (Exception e){
+            log.warn("回填会话缓存失败，conversationId={}",conversationId,e);
+        }
         return recent;
+
     }
 
     public Message saveAiMessage(Long conversationId, String content) {
@@ -97,6 +143,7 @@ public class ConversationService {
         aiMsg.setContent(content);
         aiMsg.setCreatedAt(LocalDateTime.now());
         messageMapper.insert(aiMsg);
+        evictRecentCache(conversationId);
         return aiMsg;
     }
 
@@ -147,6 +194,7 @@ public class ConversationService {
         //调用方有事务，事务提交后再推，没有事务--立刻推
         //（不能在事务里直接push，那样推送会早于提交，访客可能看到但库里查不到）
         eventPublisher.publishEvent(new SystemMessageCreatedEvent(conversationId,msg));
+        evictRecentCache(conversationId);
         return msg;
 
     }
@@ -239,7 +287,7 @@ public class ConversationService {
             conversationMapper.updateById(conversation);
         }
 
-
+        evictRecentCache(id);
 
         return agentMsg;
     }
@@ -275,9 +323,5 @@ public class ConversationService {
             //未解决
             saveSystemMessage(id,"收到，我们会继续为您跟进");
         }
-
-
-
-
     }
 }

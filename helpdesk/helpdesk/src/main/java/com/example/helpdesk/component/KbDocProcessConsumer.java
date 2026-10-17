@@ -9,6 +9,7 @@ import com.example.helpdesk.entity.KbDocument;
 import com.example.helpdesk.mapper.KbChunkMapper;
 import com.example.helpdesk.mapper.KbDocumentMapper;
 import com.example.helpdesk.service.KnowledgeBaseService;
+import com.example.helpdesk.service.RetrievalService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +65,7 @@ public class KbDocProcessConsumer implements RocketMQListener<String> {
     private final ObjectMapper objectMapper;
     //失败重投时，用它发消息
     private final KnowledgeBaseService knowledgeBaseService;
+    private final RetrievalService retrievalService;
 
     //每来一条消息，MQ就调这个方法
     @Override
@@ -139,6 +141,9 @@ public class KbDocProcessConsumer implements RocketMQListener<String> {
             doc.setChunkNum(chunks.size());
             kbDocumentMapper.updateById(doc);
             log.info("【文档处理】完成, docId={}, 块数={}", docId, chunks.size());
+
+            //文档已更新进ES -》让检索缓存失败，用户能立刻收到新内容
+            retrievalService.invalidateSearchCache();
 
 
         } catch (Exception e) {
