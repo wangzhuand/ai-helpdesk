@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisAccessor;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
@@ -56,6 +57,52 @@ public class ConversationController {
     private static final int LLM_RATE_LIMIT = 10;
     //LLM限流的key前缀
     private static final String LLM_RATE_KEY_PREFIX = "rate:llm:conv";
+    private static final String TOKEN_BUCKET_LUA= """
+            local capacity = tonumber(ARGV[1])
+            local rate = tonumber(ARGV[2])
+            local now = tonumber(ARGV[3])
+            local want = tonumber(ARGV[4])
+            
+            local bucket = redis.call('HMGET',KEYS[1],'tokens','lastRefill')
+            local tokens = tonumber(bucket[1])
+            local lastRefill = tonumber(bucket[2])
+            
+            if tokens == nil then 
+               tokens = capacity
+               lastRefill = now
+            end
+            
+            local elapsed =(now - lastRefill) / 1000
+            tokens = math.min(capacity,tokens + elapsed * rate)
+            
+            if tokens < want then 
+                redis.call('HMSET',KEYS[1],'tokens',tokens,'lastRefill',now)
+                redis.call('EXPIRE',KEYS[1],60)
+                return 0
+            end
+            
+            tokens = tokens - want
+            redis.call('HMSET',KEYS[1],'tokens',tokens,'lastRefill',now)
+            redis.call('EXPIRE',KEYS[1],60)    
+            return 1
+            """;
+
+    private static final DefaultRedisScript<Long> TOKEN_BUCKET_SCRIPT;
+    static{
+        TOKEN_BUCKET_SCRIPT = new DefaultRedisScript<>();
+        TOKEN_BUCKET_SCRIPT.setScriptText(TOKEN_BUCKET_LUA);
+        TOKEN_BUCKET_SCRIPT.setResultType(Long.class);   //脚本return的是整数
+    }
+
+    //令牌桶容量：最多能攒几个
+    private static final int BUCKET_CAPACITY = 1;
+
+    //令牌桶速率：
+    private static final double BUCKET_RATE = 0.02;
+
+
+
+
 
 
     // 接口1：创建会话（匿名访客），返回会话 id
@@ -269,41 +316,63 @@ public class ConversationController {
     //滑动窗口限流：同一会话在最近某一规定时间段内最多LLM_RATE_LIMIT次
     //固定窗口：key里带分钟，窗口窗口钉在整分钟上
     //滑动窗口：key固定，每次看现在往前推60秒，窗口跟着时间走
+//    private boolean tryAcquire(Long conversationId){
+//        //1.拼key：滑动窗口一个会话只有一个key
+//        String key = LLM_RATE_KEY_PREFIX + ":" + conversationId;
+//        long now = System.currentTimeMillis();
+//        long windowStart = now - 60_000; //60秒前那一刻
+//        try {
+//            //2.删掉60秒前的记录
+//            stringRedisTemplate.opsForZSet().removeRangeByScore(key,0,windowStart);
+//
+//            //3.数一数最近60秒还剩几次
+//            Long count = stringRedisTemplate.opsForZSet().zCard(key);
+//            long used = count == null?0:count;
+//
+//            //4.超过阈值-》拒绝
+//            if(used >= LLM_RATE_LIMIT){
+//                log.warn("LLM请求超过阈值（滑动窗口），开始限流，key ={},used={}",key,used);
+//                return false;
+//            }
+//            //5.没超过，记录本次请求
+//            stringRedisTemplate.opsForZSet().add(key, UUID.randomUUID().toString(),now);
+//
+//            //6.给key续命60秒，如果没人请求，他就自动消失
+//            stringRedisTemplate.expire(key,60,TimeUnit.SECONDS);
+//            return true;
+//        }catch (Exception e){
+//            //redis出问题了，放行
+//            log.warn("滑动窗口限流异常，本次放行，key={}",key,e);
+//        return true;
+//        }
+//    }
+
+    //LLM限流方式三：令牌桶限流
     private boolean tryAcquire(Long conversationId){
-        //1.拼key：滑动窗口一个会话只有一个key
-        String key = LLM_RATE_KEY_PREFIX + ":" + conversationId;
-        long now = System.currentTimeMillis();
-        long windowStart = now - 60_000; //60秒前那一刻
+        String key = "rate:bucket:conv" + conversationId;
         try {
-            //2.删掉60秒前的记录
-            stringRedisTemplate.opsForZSet().removeRangeByScore(key,0,windowStart);
-
-            //3.数一数最近60秒还剩几次
-            Long count = stringRedisTemplate.opsForZSet().zCard(key);
-            long used = count == null?0:count;
-
-            //4.超过阈值-》拒绝
-            if(used >= LLM_RATE_LIMIT){
-                log.warn("LLM请求超过阈值（滑动窗口），开始限流，key ={},used={}",key,used);
+            Long allowed = stringRedisTemplate.execute(
+                    TOKEN_BUCKET_SCRIPT,
+                    List.of(key),                       //和KEYS对应
+                    String.valueOf(BUCKET_CAPACITY),    //和ARGV的值对应
+                    String.valueOf(BUCKET_RATE),
+                    String.valueOf(System.currentTimeMillis()),
+                    "1"
+            );
+            if(allowed == null || allowed == 0L){
+                log.warn("LLM请求超过阈值（令牌桶），开始限流，key={}",key);
                 return false;
             }
-            //5.没超过，记录本次请求
-            stringRedisTemplate.opsForZSet().add(key, UUID.randomUUID().toString(),now);
-
-            //6.给key续命60秒，如果没人请求，他就自动消失
-            stringRedisTemplate.expire(key,60,TimeUnit.SECONDS);
             return true;
         }catch (Exception e){
-            //redis出问题了，放行
-            log.warn("滑动窗口限流异常，本次放行，key={}",key,e);
-        return true;
+            log.warn("令牌桶限流异常，本次放行，key={}",key,e);
+            return true;
+
         }
 
 
 
     }
-
-
 
 
 
@@ -333,9 +402,6 @@ public class ConversationController {
 
 
 
-
-
-
     @GetMapping(value = "/{conversationId}/stream",produces = "text/event-stream;charset=utf-8")
     public SseEmitter stream(@PathVariable Long conversationId){
         //1.设置连接超时时长
@@ -358,7 +424,5 @@ public class ConversationController {
         conversationService.markResolved(id,resolved);
         return Result.success();
     }
-
-
 
 }
