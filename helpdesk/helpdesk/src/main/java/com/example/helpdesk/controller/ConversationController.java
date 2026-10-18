@@ -22,6 +22,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -52,7 +53,7 @@ public class ConversationController {
     private final SseSessionRegistry registry;
     private final StringRedisTemplate stringRedisTemplate;
     //LLM限流
-    private static final int LLM_RATE_LIMIT = 3;
+    private static final int LLM_RATE_LIMIT = 10;
     //LLM限流的key前缀
     private static final String LLM_RATE_KEY_PREFIX = "rate:llm:conv";
 
@@ -239,30 +240,76 @@ public class ConversationController {
     固定窗口限流：同一会话每分钟最多LLM_RATE_LIMIT次。
     固定窗口的实现方法：把分钟编进key里，同一分钟所有请求落在同一个key上，跨到下一分钟，key就变了，计数器从0开始，这就是天然的窗口切换
      */
+//    private boolean tryAcquire(Long conversationId){
+//        //1.拼key
+//        String key =  LLM_RATE_KEY_PREFIX + ":" + conversationId + ":" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+//
+//        //2.自增计数，这是本分钟的第几次
+//        Long count =  stringRedisTemplate.opsForValue().increment(key);
+//        if(count == null){
+//            log.warn("限流计数失败（redis异常），本次放行");
+//            return true;
+//        }
+//
+//        //3.如果是第1次，给key设60秒过期时间
+//        if(count == 1){
+//            stringRedisTemplate.expire(key,60, TimeUnit.SECONDS);
+//        }
+//        //4.判断是否超过阈值
+//        if(count <= LLM_RATE_LIMIT){
+//            return true;
+//        }else {
+//            log.warn("LLM请求超过阈值，开始限流，key={},count={}",key,count);
+//            return false;
+//        }
+//
+//    }
+
+    //LLM限流方式二：
+    //滑动窗口限流：同一会话在最近某一规定时间段内最多LLM_RATE_LIMIT次
+    //固定窗口：key里带分钟，窗口窗口钉在整分钟上
+    //滑动窗口：key固定，每次看现在往前推60秒，窗口跟着时间走
     private boolean tryAcquire(Long conversationId){
-        //1.拼key
-        String key =  LLM_RATE_KEY_PREFIX + ":" + conversationId + ":" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+        //1.拼key：滑动窗口一个会话只有一个key
+        String key = LLM_RATE_KEY_PREFIX + ":" + conversationId;
+        long now = System.currentTimeMillis();
+        long windowStart = now - 60_000; //60秒前那一刻
+        try {
+            //2.删掉60秒前的记录
+            stringRedisTemplate.opsForZSet().removeRangeByScore(key,0,windowStart);
 
-        //2.自增计数，这是本分钟的第几次
-        Long count =  stringRedisTemplate.opsForValue().increment(key);
-        if(count == null){
-            log.warn("限流计数失败（redis异常），本次放行");
+            //3.数一数最近60秒还剩几次
+            Long count = stringRedisTemplate.opsForZSet().zCard(key);
+            long used = count == null?0:count;
+
+            //4.超过阈值-》拒绝
+            if(used >= LLM_RATE_LIMIT){
+                log.warn("LLM请求超过阈值（滑动窗口），开始限流，key ={},used={}",key,used);
+                return false;
+            }
+            //5.没超过，记录本次请求
+            stringRedisTemplate.opsForZSet().add(key, UUID.randomUUID().toString(),now);
+
+            //6.给key续命60秒，如果没人请求，他就自动消失
+            stringRedisTemplate.expire(key,60,TimeUnit.SECONDS);
             return true;
+        }catch (Exception e){
+            //redis出问题了，放行
+            log.warn("滑动窗口限流异常，本次放行，key={}",key,e);
+        return true;
         }
 
-        //3.如果是第1次，给key设60秒过期时间
-        if(count == 1){
-            stringRedisTemplate.expire(key,60, TimeUnit.SECONDS);
-        }
-        //4.判断是否超过阈值
-        if(count <= LLM_RATE_LIMIT){
-            return true;
-        }else {
-            log.warn("LLM请求超过阈值，开始限流，key={},count={}",key,count);
-            return false;
-        }
+
 
     }
+
+
+
+
+
+
+
+
 
 
 
