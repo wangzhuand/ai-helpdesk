@@ -11,14 +11,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisAccessor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -47,6 +51,11 @@ public class ConversationController {
     private final TicketService ticketService;
     private final SseSessionRegistry registry;
     private final StringRedisTemplate stringRedisTemplate;
+    //LLM限流
+    private static final int LLM_RATE_LIMIT = 3;
+    //LLM限流的key前缀
+    private static final String LLM_RATE_KEY_PREFIX = "rate:llm:conv";
+
 
     // 接口1：创建会话（匿名访客），返回会话 id
     @PostMapping
@@ -128,6 +137,21 @@ public class ConversationController {
 
 
     //*********一下是AI分支的逻辑
+        //LLM限流，同一会话中每分钟最多N次
+        if(!tryAcquire(conversationId)){
+            try {
+                emitter.send(SseEmitter.event().name("error")
+                        .data("你发得太快了，请稍等几秒钟再试"));
+            }catch (IOException e){
+                log.debug("限流提示发送失败，客户端可能已经断开：{}",e.getMessage());
+            }
+            emitter.complete();
+            return emitter;
+
+        }
+
+
+
 
         // 取最近 20 条历史，作为上下文
         List<Message> recent = conversationService.recentMessages(conversationId);
@@ -210,6 +234,37 @@ public class ConversationController {
         // 把这个 SSE 连接交给 Spring MVC 管理（挂起请求，异步返回三要素之一）
         return emitter;
     }
+
+    /*LLM限流方式一：
+    固定窗口限流：同一会话每分钟最多LLM_RATE_LIMIT次。
+    固定窗口的实现方法：把分钟编进key里，同一分钟所有请求落在同一个key上，跨到下一分钟，key就变了，计数器从0开始，这就是天然的窗口切换
+     */
+    private boolean tryAcquire(Long conversationId){
+        //1.拼key
+        String key =  LLM_RATE_KEY_PREFIX + ":" + conversationId + ":" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"));
+
+        //2.自增计数，这是本分钟的第几次
+        Long count =  stringRedisTemplate.opsForValue().increment(key);
+        if(count == null){
+            log.warn("限流计数失败（redis异常），本次放行");
+            return true;
+        }
+
+        //3.如果是第1次，给key设60秒过期时间
+        if(count == 1){
+            stringRedisTemplate.expire(key,60, TimeUnit.SECONDS);
+        }
+        //4.判断是否超过阈值
+        if(count <= LLM_RATE_LIMIT){
+            return true;
+        }else {
+            log.warn("LLM请求超过阈值，开始限流，key={},count={}",key,count);
+            return false;
+        }
+
+    }
+
+
 
     // 接口3：会话历史消息，游标分页（lastId 为空表示取最新一页）
     @GetMapping("/{conversationId}/messages")
