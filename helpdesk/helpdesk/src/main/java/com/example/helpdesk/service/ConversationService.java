@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.example.helpdesk.common.BusinessException;
 
+import com.example.helpdesk.component.RedisDelayQueue;
 import com.example.helpdesk.component.SseSessionRegistry;
 import com.example.helpdesk.component.SystemMessageCreatedEvent;
 import com.example.helpdesk.entity.Conversation;
@@ -20,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +29,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -51,6 +54,28 @@ public class ConversationService {
     private final ApplicationEventPublisher eventPublisher;
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
+    //锁的TTL：必须大于最慢的业务耗时，否则锁会在业务跑完前过期
+    private static final int LOCK_TTL_SECONDS = 30;
+
+
+
+    //分布式锁的释放锁的lua脚本
+    private static final String UNLOCK_LUA = """
+            if redis.call('GET',KEYS[1]) == ARGV[1] then
+               return redis.call('DEL',KEYS[1])
+            else
+               return 0
+            end       
+            """;
+    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
+
+    static{
+        UNLOCK_SCRIPT = new DefaultRedisScript<>();
+        UNLOCK_SCRIPT.setScriptText(UNLOCK_LUA);
+        UNLOCK_SCRIPT.setResultType(Long.class);
+
+    }
+
 
     public Long createConversation() {
         //1.先创建一个访客
@@ -82,6 +107,21 @@ public class ConversationService {
         conversation.setLastMessageAt(LocalDateTime.now());
         conversationMapper.updateById(conversation);
         evictRecentCache(conversationId);
+
+        // ★ W9-⑥ 投递延迟任务：10 分钟后检查有没有人回复
+        // 注意这里直接用本类已有的 redis，而不是注入 RedisDelayQueue
+        // —— 否则 RedisDelayQueue 依赖 ConversationService、ConversationService 又依赖它，形成循环依赖
+        // ★ 同一个 member 再次 ZADD 是【更新 score】而不是新增一条 → 访客每说一句，计时自动重置
+        try {
+            redis.opsForZSet().add(
+                    RedisDelayQueue.DELAY_QUEUE_KEY,
+                    RedisDelayQueue.REPLY_TASK_PREFIX + conversationId,
+                    System.currentTimeMillis() + RedisDelayQueue.REPLY_TIMEOUT_MILLIS);
+        } catch (Exception e) {
+            // 延迟检查是增强，投递失败不能影响发消息本身
+            log.warn("投递延迟任务失败，conversationId={}", conversationId, e);
+        }
+
         return message1;
     }
 
@@ -324,4 +364,48 @@ public class ConversationService {
             saveSystemMessage(id,"收到，我们会继续为您跟进");
         }
     }
+
+
+    public void takeOverByRedisLock(Long id,Long userId){
+        String lockKey = "lock:takeover" + id;
+        String lockValue = UUID.randomUUID().toString();
+
+        //1.占锁
+        Boolean got = redis.opsForValue().setIfAbsent(lockKey,lockValue,LOCK_TTL_SECONDS,TimeUnit.SECONDS);
+        if(!Boolean.TRUE.equals(got)){
+            throw new BusinessException("正在被其他坐席接管，请稍后再试");
+        }
+
+
+        try {
+            //2.业务
+            Conversation conversation = conversationMapper.selectById(id);
+            if (conversation == null){
+                throw new BusinessException("会话不存在");
+            }
+            conversationMapper.update(null,new LambdaUpdateWrapper<Conversation>()
+                    .eq(Conversation::getId,id)
+                    .set(Conversation::getAgentId,userId));
+            saveSystemMessage(id,"客服已接入，正在为你服务");
+        }finally {
+            //3.释放锁（Lua校验value再删）
+            try {
+                redis.execute(UNLOCK_SCRIPT,List.of(lockKey),lockValue);
+            }catch (Exception e){
+                log.warn("释放抢单锁失败吗，lockKey={}",lockKey,e);
+            }
+
+        }
+
+
+
+
+
+    }
+
+
+
+
+
+
 }

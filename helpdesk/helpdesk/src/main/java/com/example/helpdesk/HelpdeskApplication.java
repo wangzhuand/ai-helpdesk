@@ -2,6 +2,7 @@ package com.example.helpdesk;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * ClassName:com.example.helpdesk.HelpdeskApplication
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * @Create 2026/9/4 15:00
  * @Version 1.0
  */
+@EnableScheduling
 @SpringBootApplication
 public class HelpdeskApplication {
     public static void main(String[] args) {

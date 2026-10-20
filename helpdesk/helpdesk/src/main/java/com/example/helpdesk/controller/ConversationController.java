@@ -57,6 +57,8 @@ public class ConversationController {
     private static final int LLM_RATE_LIMIT = 10;
     //LLM限流的key前缀
     private static final String LLM_RATE_KEY_PREFIX = "rate:llm:conv";
+
+    //令牌桶的lua脚本
     private static final String TOKEN_BUCKET_LUA= """
             local capacity = tonumber(ARGV[1])
             local rate = tonumber(ARGV[2])
@@ -99,6 +101,10 @@ public class ConversationController {
 
     //令牌桶速率：
     private static final double BUCKET_RATE = 0.02;
+
+
+
+
 
 
 
