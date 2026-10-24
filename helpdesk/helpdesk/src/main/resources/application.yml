@@ -9,6 +9,9 @@ spring:
     username: root
     password: abc123
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 从连接池拿连接最多等 3 秒（默认 30 秒，数据库一卡就等太久）
+      connection-timeout: 3000
   ai:
     openai:
       base-url: https://api.deepseek.com
@@ -17,10 +20,19 @@ spring:
           model: deepseek-v4-flash
   elasticsearch:
     uris: http://localhost:9200
+    connection-timeout: 3s
+    socket-timeout: 10s
   data:
     redis:
       host: localhost
       port: 6379
+      # 单条 Redis 命令最多等 3 秒（默认无限，Redis 卡住会一直等）
+      timeout: 3000ms
+  # 自动配置的 RestClient / WebClient 用这组超时（LLM 走的是这里，需启动后验证）
+  http:
+    client:
+      connect-timeout: 3s
+      read-timeout: 60s
 
 
 
@@ -36,3 +48,9 @@ rocketmq:
   producer:
     group: helpdesk-producer
     send-message-timeout: 3000
+
+# ★ W10-① traceId：%X{traceId:-} 从 MDC 取值，没有时显示空（不报错）
+# 输出示例：14:23:05.123 INFO  [Tomcat-1] [a1b2c3d4e5f6a7b8] c.e.h.s.KnowledgeBaseService - 文档已入库...
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"

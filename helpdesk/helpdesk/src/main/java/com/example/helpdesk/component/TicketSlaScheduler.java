@@ -1,5 +1,6 @@
 package com.example.helpdesk.component;
 
+import com.example.helpdesk.common.TraceIds;
 import com.example.helpdesk.service.TicketService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,7 +33,11 @@ public class TicketSlaScheduler {
     public void onTicketCreated(TicketCreatedEvent event){
         Long ticketId = event.getTicketId();
 
-        Message<String> message = MessageBuilder.withPayload(String.valueOf(ticketId)).build();
+        // ★ W10-① 把当前线程（HTTP 请求线程）的 traceId 写进消息属性，
+        // 消费者 SlaCheckConsumer 会取出来放进 MDC —— 这样"建工单"和"到点检查"的日志能串成一条线
+        MessageBuilder<String> builder = MessageBuilder.withPayload(String.valueOf(ticketId));
+        TraceIds.attach(builder);
+        Message<String> message = builder.build();
         rocketMQTemplate.syncSend(
                 TicketService.SLA_TOPIC,
                 message,

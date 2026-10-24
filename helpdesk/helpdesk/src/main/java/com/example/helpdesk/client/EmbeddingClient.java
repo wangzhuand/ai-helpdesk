@@ -2,6 +2,7 @@ package com.example.helpdesk.client;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -30,13 +31,17 @@ public class EmbeddingClient {
     private String apikey;
 
     private final ObjectMapper objectMapper;
+    // 单例注入（HttpClientConfig 里带超时配置），不再每次 new
+    @Autowired
+    private final RestClient restClient;
+
 public float[] embed(String text) {
     try {
         Map<String, Object> body = Map.of(
                 "model", model,
                 "input", text
         );
-        String response = RestClient.create().post().uri(baseUrl + "/embeddings").header("Authorization", "Bearer " + apikey)
+        String response = restClient.post().uri(baseUrl + "/embeddings").header("Authorization", "Bearer " + apikey)
                 .contentType(MediaType.APPLICATION_JSON).body(body).retrieve().body(String.class);
 
         JsonNode path = objectMapper.readTree(response).path("data").get(0).path("embedding");

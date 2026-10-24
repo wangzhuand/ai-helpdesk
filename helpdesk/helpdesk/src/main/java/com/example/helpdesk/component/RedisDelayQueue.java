@@ -1,5 +1,6 @@
 package com.example.helpdesk.component;
 
+import com.example.helpdesk.common.TraceIds;
 import com.example.helpdesk.entity.Message;
 import com.example.helpdesk.service.ConversationService;
 import lombok.RequiredArgsConstructor;
@@ -12,20 +13,10 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * ClassName:RedisDelayQueue
- * Package:com.example.helpdesk.component
- * Description: 基于 Redis ZSet 的延迟队列（W9-⑥）
- *
- * <p>原理：ZSet 的 score 存"到期时间戳"，Redis 自动按 score 排序。
- * <ul>
- *   <li>投递：{@code ZADD delay:queue <到期时间> <member>}（由投递方直接调用，见 ConversationService.saveVisitorMessage）</li>
- *   <li>消费：定时 {@code ZRANGEBYSCORE 0 now} 只捞"已到点"的</li>
- *   <li>抢占：{@code ZREM} 返回 1 才是我的活（多实例下天然防重复）</li>
- * </ul>
- *
- * <p>★ 和 MQ 延迟消息的分工：<b>能丢的用 ZSet，不能丢的用 MQ。</b>
- * 这里的"无人回复提醒"丢了只是少提醒一次，所以 ZSet 够用；
- * SLA 升级、订单关单那类不能丢的，仍然走 MQ 延迟消息。
+ * 基于 Redis ZSet 的延迟队列。
+ * score 存到期时间戳，Redis 自动按 score 排序，所以永远知道最早到点的是哪个。
+ * 投递：ZADD；消费：定时 ZRANGEBYSCORE 捞到点的；抢占：ZREM 返回 1 才算拿到。
+ * 能丢的用 ZSet，不能丢的（SLA、订单关单）还是走 MQ 延迟消息。
  *
  * @Author 妄汐霜
  * @Create 2026/10/20
@@ -48,20 +39,15 @@ public class RedisDelayQueue {
     /** 任务类型前缀：访客消息无回复检查。member 形如 conv:reply:123 */
     public static final String REPLY_TASK_PREFIX = "conv:reply:";
 
-    /** 访客发消息后多久检查有没有人回复（10 分钟） */
-    public static final long REPLY_TIMEOUT_MILLIS = 10 * 1000L;
+    // 访客发消息后多久检查有没有人回复（10 分钟）
+    public static final long REPLY_TIMEOUT_MILLIS = 10 * 60 * 1000L;
 
     /** 每轮最多捞多少条，防止一次拉太多把线程卡住 */
     private static final int BATCH_SIZE = 100;
 
     // ===================== ① 轮询 =====================
 
-    /**
-     * 每秒扫一次"便利贴墙"。
-     *
-     * <p>★ 用 fixedDelay 而不是 fixedRate：fixedRate 在上一轮跑超时的情况下会叠加多轮，
-     * 多个线程同时捞同一批任务；fixedDelay 保证"上一轮跑完才计时"。
-     */
+    // 每秒扫一次。用 fixedDelay 不用 fixedRate：fixedRate 在上一轮跑超时时会叠多轮，多个线程抢同一批任务
     @Scheduled(fixedDelay = 1000)
     public void poll() {
         long now = System.currentTimeMillis();
@@ -94,11 +80,17 @@ public class RedisDelayQueue {
                 continue;
             }
 
+            // ★ W10-① 调度线程没有 HTTP 请求上下文（MDC 是空的），
+            // 用 member 造一个 traceId —— 这样"贴便利贴"和"执行任务"的日志能对上，
+            // 同一批里的不同任务也能区分开
+            TraceIds.set("delay-" + member);
             try {
                 handle(member);
             } catch (Exception e) {
                 // ★ 单条任务失败不能影响同一批里的其他任务
                 log.warn("[延迟队列]执行任务失败，member={}", member, e);
+            } finally {
+                TraceIds.clear();
             }
         }
     }
@@ -117,13 +109,9 @@ public class RedisDelayQueue {
 
     // ===================== ③ 具体业务 =====================
 
-    /**
-     * 访客消息超时未回复的检查。
-     *
-     * <p>★ 为什么"到点还要再查一遍"：便利贴只认时间，不认业务 ——
-     * 这 10 分钟里 AI 或坐席可能已经回复了，但 ZSet 里的任务不会自动消失。
-     * 这和 SlaCheckConsumer 到点后还要查"工单还是不是 OPEN"是同一个道理。
-     */
+    // 访客消息超时未回复的检查。
+    // 到点必须再查一遍：这 10 分钟里 AI 或坐席可能已经回复了，但 ZSet 里的任务不会自己消失。
+    // 和 SlaCheckConsumer 到点后再查工单是否 OPEN 一个道理。
     private void handleReplyTimeout(Long conversationId) {
         List<Message> recent;
         try {

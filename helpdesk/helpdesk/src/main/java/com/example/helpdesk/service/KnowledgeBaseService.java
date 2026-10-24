@@ -4,6 +4,7 @@ package com.example.helpdesk.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import com.example.helpdesk.common.TraceIds;
 import com.example.helpdesk.dto.KbDocProcessMessage;
 
 import com.example.helpdesk.dto.KbDocTxArg;
@@ -89,12 +90,18 @@ public class KnowledgeBaseService {
            throw new IllegalStateException("文档处理消息序列化失败",e);
        }
 
+       // ★ W10-① 两种发送方式都要带 traceId。
+       // 注意：convertAndSend(topic, json) 没法带消息属性，所以这里改成 send(topic, message)
+       MessageBuilder<String> builder = MessageBuilder.withPayload(json);
+       TraceIds.attach(builder);
+       Message<String> message = builder.build();
+
        if(delayLevel > 0){
-           Message<String> message = MessageBuilder.withPayload(json).build();
            rocketMQTemplate.syncSend(KB_DOC_TOPIC,message,3000,delayLevel);
-           log.error("已投递【延迟重投】消息：docId={},attempt={},delayLevel={}",docId,attempt,delayLevel);
+           // 延迟重投是正常流程（不是故障），用 info —— 不然排查时满屏 ERROR 干扰视线
+           log.info("已投递【延迟重投】消息：docId={},attempt={},delayLevel={}",docId,attempt,delayLevel);
        }else {
-           rocketMQTemplate.convertAndSend(KB_DOC_TOPIC,json);
+           rocketMQTemplate.send(KB_DOC_TOPIC,message);
        }
 
 
@@ -122,7 +129,10 @@ public class KnowledgeBaseService {
             throw new IllegalStateException("文档处理消息序列化失败",e);
         }
 
-        Message<String> message = MessageBuilder.withPayload(json).build();
+        // ★ W10-① 事务消息同样要带 traceId（半消息也支持消息属性）
+        MessageBuilder<String> builder = MessageBuilder.withPayload(json);
+        TraceIds.attach(builder);
+        Message<String> message = builder.build();
         rocketMQTemplate.sendMessageInTransaction(KB_DOC_TOPIC,message,txArg);
 
 

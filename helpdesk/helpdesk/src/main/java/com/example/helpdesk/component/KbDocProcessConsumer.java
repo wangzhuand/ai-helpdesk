@@ -17,6 +17,9 @@ import org.apache.rocketmq.spring.annotation.RocketMQMessageListener;
 import org.apache.rocketmq.spring.core.RocketMQListener;
 import org.springframework.stereotype.Component;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.example.helpdesk.common.TraceIds;
+import org.apache.rocketmq.common.message.MessageExt;
+import java.nio.charset.StandardCharsets;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,7 +43,8 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 @RocketMQMessageListener(topic = KnowledgeBaseService.KB_DOC_TOPIC,consumerGroup = "kb-doc-group")
-public class KbDocProcessConsumer implements RocketMQListener<String> {
+// ★ W10-① 泛型从 String 改成 MessageExt：String 只能拿到消息体，拿不到消息属性里的 traceId
+public class KbDocProcessConsumer implements RocketMQListener<MessageExt> {
     private static final int CHUNK_SIZE = 500;
     private static final int CHUNK_OVERLAP = 50;
     private static final String ES_INDEX = "kb_chunk";
@@ -69,7 +73,19 @@ public class KbDocProcessConsumer implements RocketMQListener<String> {
 
     //每来一条消息，MQ就调这个方法
     @Override
-    public void onMessage(String body) {
+    public void onMessage(MessageExt messageExt) {
+        // ★ 把发消息那个线程的 traceId 接到当前消费线程上
+        TraceIds.set(messageExt.getUserProperty(TraceIds.KEY));
+        try {
+            process(new String(messageExt.getBody(), StandardCharsets.UTF_8));
+        } finally {
+            // ★ 消费线程是复用的，不清会污染下一条消息
+            TraceIds.clear();
+        }
+    }
+
+    /** 原来的处理逻辑（只是从 onMessage 改名为 process，内容未动） */
+    private void process(String body) {
         KbDocProcessMessage msg;
         try {
             msg = objectMapper.readValue(body, KbDocProcessMessage.class);
