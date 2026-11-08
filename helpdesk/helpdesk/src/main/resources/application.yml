@@ -49,6 +49,19 @@ rocketmq:
     group: helpdesk-producer
     send-message-timeout: 3000
 
+# ★ W10-③ 熔断：ES 检索连续失败就跳闸，避免每个请求都白等 10 秒
+resilience4j:
+  circuitbreaker:
+    instances:
+      retrieval:
+        sliding-window-size: 10               # 看最近 10 次调用
+        minimum-number-of-calls: 5            # 至少 5 次才开始统计，防单次抖动误判
+        failure-rate-threshold: 50            # 失败率 ≥50% → 跳闸
+        wait-duration-in-open-state: 30s      # 跳闸后 30 秒内不再调
+        permitted-number-of-calls-in-half-open-state: 3   # 30 秒后放 3 个试探
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true       # 能从 /actuator/health 看到熔断状态
+
 # ★ W10-① traceId：%X{traceId:-} 从 MDC 取值，没有时显示空（不报错）
 # 输出示例：14:23:05.123 INFO  [Tomcat-1] [a1b2c3d4e5f6a7b8] c.e.h.s.KnowledgeBaseService - 文档已入库...
 logging:

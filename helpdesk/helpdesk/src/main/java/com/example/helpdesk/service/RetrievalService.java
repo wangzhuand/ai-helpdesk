@@ -8,6 +8,10 @@ import com.example.helpdesk.common.BusinessException;
 import com.example.helpdesk.dto.RetrievedChunk;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -63,6 +67,17 @@ public class RetrievalService {
     private static final int SEARCH_CACHE_TTL_MINUTES = 10;
     private final ObjectMapper objectMapper;
 
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+
+    // 熔断器：参数在 application.yml 的 resilience4j.circuitbreaker.instances.retrieval
+    private CircuitBreaker retrievalCircuitBreaker;
+
+    @PostConstruct
+    void initCircuitBreaker() {
+        // 按名字取，必须和 yml 里的 instances 名字一致
+        this.retrievalCircuitBreaker = circuitBreakerRegistry.circuitBreaker("retrieval");
+    }
+
 
     //统一入口，按mode分流，controller只调这一个方法
     //redis缓存就加在这一层：所有模式和所有调用方法都经过这里
@@ -78,16 +93,19 @@ public class RetrievalService {
                 });
             }
         }catch (Exception e){
-            log.warn("读检查缓存失败，降级直查数据库，key={}",key);
+            log.warn("读检索缓存失败，跳过缓存差ES，key={}",key,e);
         }
 
 
-        //2.未命中。走原来的检索逻辑
-        List<RetrievedChunk> result =  switch(mode){
-            case "keyword" -> searchByKeyword(query,k);
-            case "vector" -> searchByVector(query,k);
-            default  -> searchByHybrid(query,k);  //默认走混合检索
-        };
+        //2走ES
+        List<RetrievedChunk> result;
+        try {
+            result = retrievalCircuitBreaker.executeSupplier(() -> doSearch(query,mode,k));
+        }catch (CallNotPermittedException e){
+            //熔断打开，请求没发出去
+            log.warn("[熔断]检索已熔断，跳过ES直接降级，mode={}",mode);
+            return List.of();
+        }
 
         //回填缓存
         try{
@@ -98,6 +116,13 @@ public class RetrievalService {
         }
 
         return result;
+    }
+    private List<RetrievedChunk> doSearch(String query,String mode,int k){
+        return switch (mode){
+            case "keyword" -> searchByKeyword(query, k);
+            case "vector" -> searchByVector(query, k);
+            default ->  searchByHybrid(query, k);
+        };
     }
 
     //让检索缓存全部失效--文档新增/修改/删除后调用
