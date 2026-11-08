@@ -55,10 +55,17 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics
+        include: health,metrics,circuitbreakers
   endpoint:
     health:
       show-details: always          # 本机练手用 always；上生产改成 when-authorized
+  health:
+    elasticsearch:
+      # ES 服务端 8.13 返回的 cluster.health，8.18 客户端强类型解析不了（报 Failed to decode response）
+      # 但检索用的是 SearchResponse<Map>，宽松装，不受影响 —— 关掉这个假警报，免得真出问题时分不清
+      # ⚠️ 2026-11-08 实测：在 Spring Boot 3.5.3 下这行没生效（health 里仍有 elasticsearch=DOWN），
+      #    待 W11 把 elasticsearch-java 版本对齐到 8.13.4 后再验证
+      enabled: false
   metrics:
     tags:
       application: helpdesk
