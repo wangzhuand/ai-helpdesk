@@ -49,6 +49,20 @@ rocketmq:
     group: helpdesk-producer
     send-message-timeout: 3000
 
+# ★ W10-④ 观测：只暴露 health 和 metrics
+# 千万不要开 env / heapdump —— env 里有 API Key，heapdump 是内存快照（能翻出所有对象）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: always          # 本机练手用 always；上生产改成 when-authorized
+  metrics:
+    tags:
+      application: helpdesk
+
 # ★ W10-③ 熔断：ES 检索连续失败就跳闸，避免每个请求都白等 10 秒
 resilience4j:
   circuitbreaker:
